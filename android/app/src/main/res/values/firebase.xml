@@ -4,5 +4,5 @@
          in Firebase: the Supabase URL and publishable key come from android/local.properties (see
          app/build.gradle.kts). While any of the three is still a YOUR_ placeholder, the app shows
          "Cloud sync isn't set up" and stays fully offline. Setup: docs/ARCHITECTURE.md. -->
-    <string name="firebase_api_key" translatable="false">YOUR_WEB_API_KEY</string>
+    <string name="firebase_api_key" translatable="false">AIzaSyCy0w6NibqnXGHSyGxtMgG3fAqsbxi_AG4</string>
 </resources>
