@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
@@ -7,7 +9,7 @@ plugins {
 // URL and the *publishable* key). Never put a secret or service_role key here: Silk refuses to use one,
 // and anything in the APK can be read by anyone. A missing value becomes a YOUR_ placeholder, which
 // keeps cloud sync off (the app stays fully offline).
-val localProps = java.util.Properties().apply {
+val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.isFile) f.inputStream().use { load(it) }
 }
