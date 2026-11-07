@@ -28,6 +28,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.ArrayList;
@@ -298,16 +299,28 @@ public class SilkActivity extends NativeActivity {
         return last != null ? last : "key file";
     }
 
-    // ---- cloud (Firebase): the protocol lives in Rust, Java only carries the HTTPS call ----
+    // ---- cloud (Firebase sign-in, Supabase storage): the protocol lives in Rust, Java only carries the HTTPS call ----
 
-    /** One HTTPS request for Rust's Firebase client; see {@link Net} for the reply layout. Called on a worker thread. */
+    /** One HTTPS request for Rust's cloud clients; see {@link Net} for the reply layout. Called on a worker thread. */
     public byte[] http(String method, String url, String headers, byte[] body) {
-        return Net.request(method, url, headers, body);
+        return Net.request(method, url, headers, body, supabaseHost());
     }
 
-    /** "web api key", a newline, "storage bucket", from res/values/firebase.xml. */
-    public String firebaseConfig() {
-        return getString(R.string.firebase_api_key) + "\n" + getString(R.string.firebase_bucket);
+    /** The Firebase web API key, the Supabase project URL and the Supabase publishable key, one per line. */
+    public String cloudConfig() {
+        return getString(R.string.firebase_api_key) + "\n" + getString(R.string.supabase_url) + "\n"
+                + getString(R.string.supabase_publishable_key);
+    }
+
+    /** The one host Net may reach besides Firebase sign-in: the configured Supabase project, or null. */
+    private String supabaseHost() {
+        try {
+            URL u = new URL(getString(R.string.supabase_url).trim());
+            String host = u.getHost();
+            return "https".equals(u.getProtocol()) && host != null && host.endsWith(".supabase.co") ? host : null;
+        } catch (Exception e) {
+            return null; // still a placeholder: Rust won't send anything either
+        }
     }
 
     // ---- clipboard ----

@@ -1,5 +1,5 @@
-//! Firebase over HTTPS, as the core sees it: Auth (email and password) and Storage (the two objects
-//! per user), behind a one-method [`Http`] trait.
+//! Firebase Authentication over HTTPS, as the core sees it (email and password accounts, id tokens),
+//! behind a one-method [`Http`] trait.
 //!
 //! The core never opens a socket. The platform layer implements [`Http`] (on Android, a few lines of
 //! Java reached over JNI) and this module does the protocol: building the URLs, the token handling,
@@ -8,25 +8,20 @@
 //! ```text
 //! sign in / sign up   POST identitytoolkit.googleapis.com/v1/accounts:signInWithPassword | signUp
 //! renew the token     POST securetoken.googleapis.com/v1/token          (refresh token, no password)
-//! read an object      GET  firebasestorage.googleapis.com/v0/b/<bucket>/o/vaults%2F<uid>%2F<file>?alt=media
-//! write an object     POST firebasestorage.googleapis.com/v0/b/<bucket>/o?name=vaults%2F<uid>%2F<file>
 //! ```
 //!
-//! Storage calls carry `Authorization: Firebase <id token>`; `firebase/storage.rules` lets a user
-//! touch only `vaults/<their uid>/`. Everything stored is ciphertext, so Firebase stays untrusted.
-//! The account password is only ever sent to the sign-in call; what is kept afterwards is the
-//! refresh token (see `keyfile::Login`).
+//! Firebase only answers "who is this". The two encrypted vault files live in Supabase Storage (see
+//! `supabase`), which accepts the Firebase id token from [`Account`]. The account password is only
+//! ever sent to the sign-in call; what is kept afterwards is the refresh token (see `keyfile::Login`).
 use crate::error::Error;
 use crate::keyfile::Login;
-use crate::remote::{Object, RemoteStore};
 use serde::Deserialize;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const AUTH_HOST: &str = "https://identitytoolkit.googleapis.com";
 const TOKEN_HOST: &str = "https://securetoken.googleapis.com";
-const STORAGE_HOST: &str = "https://firebasestorage.googleapis.com";
 /// An id token is renewed this many seconds before it runs out.
 const SKEW_SECS: u64 = 60;
 
@@ -54,38 +49,27 @@ pub trait Http {
 
 // ---- configuration ----
 
-/// The two values from the Firebase console that the app needs.
+/// The one value from the Firebase console that the app needs: the Web API key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     api_key: String,
-    bucket: String,
 }
 
 impl Config {
-    /// `None` when a value is empty, still a `YOUR_...` placeholder, or has characters that don't belong
-    /// in a key or bucket name (they are put into URLs, so they are checked here).
-    pub fn new(api_key: &str, bucket: &str) -> Option<Config> {
+    /// `None` when the key is empty, still a `YOUR_...` placeholder, or has characters that don't belong
+    /// in a key (it is put into URLs, so it is checked here).
+    pub fn new(api_key: &str) -> Option<Config> {
         let api_key = api_key.trim();
-        let bucket = bucket.trim();
-        let bucket = bucket.strip_prefix("gs://").unwrap_or(bucket);
-        let unset = |s: &str| s.is_empty() || s.starts_with("YOUR_");
+        let unset = api_key.is_empty() || api_key.starts_with("YOUR_");
         let key_ok = api_key
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-        let bucket_ok = bucket.chars().all(|c| {
-            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.'
-        });
-        if unset(api_key) || unset(bucket) || !key_ok || !bucket_ok {
+        if unset || !key_ok {
             return None;
         }
         Some(Config {
             api_key: api_key.to_owned(),
-            bucket: bucket.to_owned(),
         })
-    }
-
-    pub fn bucket(&self) -> &str {
-        &self.bucket
     }
 }
 
@@ -280,18 +264,19 @@ fn api_error(status: u16, body: &[u8]) -> Error {
     }
 }
 
-// ---- storage ----
+// ---- the signed-in account ----
 
-/// The user's two objects in Firebase Storage, as a [`RemoteStore`]. Renews the id token when it
-/// has run out (and once more if Firebase answers 401), so a long-lived store keeps working.
-pub struct FirebaseStore<'a> {
+/// A signed-in account's tokens, kept fresh: the id token is renewed when it has run out, or when
+/// the service that received it rejected it ([`Account::renew`]). Whatever talks to a service that
+/// accepts Firebase id tokens (Supabase Storage) gets its token here.
+pub struct Account<'a> {
     http: &'a dyn Http,
     cfg: Config,
     auth: Mutex<Auth>,
 }
 
-impl<'a> FirebaseStore<'a> {
-    pub fn new(http: &'a dyn Http, cfg: Config, auth: Auth) -> Result<FirebaseStore<'a>, Error> {
+impl<'a> Account<'a> {
+    pub fn new(http: &'a dyn Http, cfg: Config, auth: Auth) -> Result<Account<'a>, Error> {
         // The uid becomes part of the object path, so it must be what Firebase hands out: letters, digits, - and _.
         let ok = !auth.uid.is_empty()
             && auth
@@ -301,7 +286,7 @@ impl<'a> FirebaseStore<'a> {
         if !ok {
             return Err(Error::Corrupt);
         }
-        Ok(FirebaseStore {
+        Ok(Account {
             http,
             cfg,
             auth: Mutex::new(auth),
@@ -313,108 +298,42 @@ impl<'a> FirebaseStore<'a> {
         self.lock().clone()
     }
 
+    pub fn uid(&self) -> String {
+        self.lock().uid.clone()
+    }
+
     fn lock(&self) -> MutexGuard<'_, Auth> {
         self.auth.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn object_path(&self, object: Object) -> String {
-        format!("vaults/{}/{}", self.lock().uid, object.file_name())
-    }
-
-    fn token(&self) -> Result<String, Error> {
+    /// An id token that is good for at least another minute: the current one, or a renewed one.
+    pub fn token(&self) -> Result<Zeroizing<String>, Error> {
         let (fresh, token) = {
             let a = self.lock();
             (a.fresh(unix_now()), a.id_token.clone())
         };
         if fresh {
-            Ok(token)
+            Ok(Zeroizing::new(token))
         } else {
             self.renew()
         }
     }
 
-    fn renew(&self) -> Result<String, Error> {
+    /// Trades the refresh token for a new id token, whatever the clock says. Used after a service
+    /// rejected the current one.
+    pub fn renew(&self) -> Result<Zeroizing<String>, Error> {
         let (email, refresh_token) = {
             let a = self.lock();
             (a.email.clone(), a.refresh_token.clone())
         };
         let next = refresh(self.http, &self.cfg, &email, &refresh_token)?;
-        let token = next.id_token.clone();
+        let token = Zeroizing::new(next.id_token.clone());
         *self.lock() = next;
         Ok(token)
     }
-
-    /// Sends the request built for the current token; on a 401 renews the token and tries once more.
-    fn call(&self, make: impl Fn(&str) -> HttpRequest) -> Result<HttpResponse, Error> {
-        let mut renewed = false;
-        loop {
-            let token = self.token()?;
-            let resp = self.http.send(&make(&token))?;
-            if resp.status == 401 && !renewed {
-                renewed = true;
-                self.renew()?;
-                continue;
-            }
-            return Ok(resp);
-        }
-    }
 }
 
-fn storage_error(resp: &HttpResponse) -> Error {
-    match resp.status {
-        401 => Error::SignedOut,
-        403 => Error::Remote(
-            "Firebase refused the request. Check the storage rules and which account is signed in."
-                .into(),
-        ),
-        s => Error::Remote(format!("Firebase Storage answered {s}")),
-    }
-}
-
-impl RemoteStore for FirebaseStore<'_> {
-    fn get(&self, object: Object) -> Result<Option<Vec<u8>>, Error> {
-        let url = format!(
-            "{STORAGE_HOST}/v0/b/{}/o/{}?alt=media",
-            self.cfg.bucket,
-            url_encode(&self.object_path(object))
-        );
-        let resp = self.call(|token| HttpRequest {
-            method: "GET",
-            url: url.clone(),
-            headers: vec![("Authorization".into(), format!("Firebase {token}"))],
-            body: Vec::new(),
-        })?;
-        match resp.status {
-            200 => Ok(Some(resp.body)),
-            404 => Ok(None),
-            _ => Err(storage_error(&resp)),
-        }
-    }
-
-    fn put(&self, object: Object, data: &[u8]) -> Result<(), Error> {
-        let url = format!(
-            "{STORAGE_HOST}/v0/b/{}/o?name={}",
-            self.cfg.bucket,
-            url_encode(&self.object_path(object))
-        );
-        let resp = self.call(|token| HttpRequest {
-            method: "POST",
-            url: url.clone(),
-            headers: vec![
-                ("Authorization".into(), format!("Firebase {token}")),
-                ("Content-Type".into(), "application/octet-stream".into()),
-            ],
-            body: data.to_vec(),
-        })?;
-        match resp.status {
-            200 | 201 => Ok(()),
-            _ => Err(storage_error(&resp)),
-        }
-    }
-}
-
-/// Percent-encodes everything except letters, digits and `-_.~`. A `/` becomes `%2F`, which is how
-/// Firebase Storage wants an object path inside a URL.
+/// Percent-encodes everything except letters, digits and `-_.~` (form encoding for the token call).
 pub fn url_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for b in s.bytes() {
@@ -467,7 +386,7 @@ mod tests {
     }
 
     fn cfg() -> Config {
-        Config::new("AIzaTestKey_1", "demo.appspot.com").unwrap()
+        Config::new("AIzaTestKey_1").unwrap()
     }
 
     fn auth(expires_at: u64) -> Auth {
@@ -564,84 +483,41 @@ mod tests {
     }
 
     #[test]
-    fn storage_reads_map_404_to_none_and_send_the_token() {
-        let http = Script::new(vec![(404, "{}"), (200, "ciphertext")]);
-        let store = FirebaseStore::new(&http, cfg(), auth(unix_now() + 3600)).unwrap();
-        assert_eq!(store.get(Object::KeySlot).unwrap(), None);
-        assert_eq!(store.get(Object::KeySlot).unwrap().unwrap(), b"ciphertext");
-        let seen = http.seen.borrow();
-        assert_eq!(
-            seen[0].url,
-            "https://firebasestorage.googleapis.com/v0/b/demo.appspot.com/o/vaults%2Fuid123%2Fkeyslot.skvk?alt=media"
-        );
-        assert_eq!(
-            seen[0].headers[0],
-            ("Authorization".to_string(), "Firebase id1".to_string())
-        );
+    fn an_expired_token_is_renewed_on_demand_and_the_new_refresh_token_is_kept() {
+        // Expired: token() trades the refresh token first.
+        let http = Script::new(vec![(200, REFRESH_OK)]);
+        let account = Account::new(&http, cfg(), auth(0)).unwrap();
+        assert_eq!(account.token().unwrap().as_str(), "tok2");
+        assert_eq!(account.auth().refresh_token, "ref2");
+        assert_eq!(account.uid(), "uid123");
+
+        // Fresh: no request at all.
+        let http = Script::new(vec![]);
+        let account = Account::new(&http, cfg(), auth(unix_now() + 3600)).unwrap();
+        assert_eq!(account.token().unwrap().as_str(), "id1");
+        assert!(http.seen.borrow().is_empty());
+
+        // renew() ignores the clock: it is for a token the other side rejected.
+        let http = Script::new(vec![(200, REFRESH_OK)]);
+        let account = Account::new(&http, cfg(), auth(unix_now() + 3600)).unwrap();
+        assert_eq!(account.renew().unwrap().as_str(), "tok2");
+
+        // A dead refresh token means signed out.
+        let http = Script::new(vec![(400, r#"{"error":{"message":"TOKEN_EXPIRED"}}"#)]);
+        let account = Account::new(&http, cfg(), auth(0)).unwrap();
+        assert_eq!(account.token().err(), Some(Error::SignedOut));
     }
 
     #[test]
-    fn a_failed_read_is_an_error_never_none() {
-        // The first-time setup path creates a new VEK on "not there", so 403 and 500 must not look like that.
-        let http = Script::new(vec![(403, "{}"), (500, "{}")]);
-        let store = FirebaseStore::new(&http, cfg(), auth(unix_now() + 3600)).unwrap();
-        assert!(matches!(
-            store.get(Object::Archive).err(),
-            Some(Error::Remote(_))
-        ));
-        assert!(matches!(
-            store.get(Object::Archive).err(),
-            Some(Error::Remote(_))
-        ));
-    }
-
-    #[test]
-    fn writes_post_the_bytes_into_the_users_folder() {
-        let http = Script::new(vec![(200, "{}")]);
-        let store = FirebaseStore::new(&http, cfg(), auth(unix_now() + 3600)).unwrap();
-        store.put(Object::KeySlot, b"slot").unwrap();
-        let seen = http.seen.borrow();
-        assert_eq!(seen[0].method, "POST");
-        assert_eq!(seen[0].url, "https://firebasestorage.googleapis.com/v0/b/demo.appspot.com/o?name=vaults%2Fuid123%2Fkeyslot.skvk");
-        assert_eq!(seen[0].body, b"slot");
-    }
-
-    #[test]
-    fn an_expired_token_is_renewed_before_the_call_and_a_401_once_more() {
-        // Expired: the refresh happens first, then the read uses the new token.
-        let http = Script::new(vec![(200, REFRESH_OK), (200, "data")]);
-        let store = FirebaseStore::new(&http, cfg(), auth(0)).unwrap();
-        assert_eq!(store.get(Object::Archive).unwrap().unwrap(), b"data");
-        assert_eq!(http.seen.borrow()[1].headers[0].1, "Firebase tok2");
-        assert_eq!(store.auth().refresh_token, "ref2");
-
-        // Fresh but rejected with 401: renew, retry, succeed.
-        let http = Script::new(vec![(401, "{}"), (200, REFRESH_OK), (200, "data")]);
-        let store = FirebaseStore::new(&http, cfg(), auth(unix_now() + 3600)).unwrap();
-        assert_eq!(store.get(Object::Archive).unwrap().unwrap(), b"data");
-        assert_eq!(http.seen.borrow().len(), 3);
-
-        // Still 401 after the renewal: signed out.
-        let http = Script::new(vec![(401, "{}"), (200, REFRESH_OK), (401, "{}")]);
-        let store = FirebaseStore::new(&http, cfg(), auth(unix_now() + 3600)).unwrap();
-        assert_eq!(store.get(Object::Archive).err(), Some(Error::SignedOut));
-    }
-
-    #[test]
-    fn urls_are_built_only_from_checked_parts() {
-        assert_eq!(url_encode("vaults/a b/ü"), "vaults%2Fa%20b%2F%C3%BC");
-        assert!(Config::new("", "b.appspot.com").is_none());
-        assert!(Config::new("YOUR_WEB_API_KEY", "b.appspot.com").is_none());
-        assert!(Config::new("key", "YOUR_BUCKET").is_none());
-        assert!(Config::new("key&x=1", "b.appspot.com").is_none());
-        assert!(Config::new("key", "b.appspot.com/../x?").is_none());
-        assert_eq!(
-            Config::new(" key ", "gs://b.appspot.com").unwrap().bucket(),
-            "b.appspot.com"
-        );
+    fn config_and_uid_are_checked_before_they_reach_a_url() {
+        assert_eq!(url_encode("a b+c/ü"), "a%20b%2Bc%2F%C3%BC");
+        assert!(Config::new("").is_none());
+        assert!(Config::new("YOUR_WEB_API_KEY").is_none());
+        assert!(Config::new("key&x=1").is_none());
+        assert!(Config::new(" key ").is_some());
         let http = Script::new(vec![]);
         let mut bad = auth(0);
         bad.uid = "../other".into();
-        assert!(FirebaseStore::new(&http, cfg(), bad).is_err());
+        assert!(Account::new(&http, cfg(), bad).is_err());
     }
 }

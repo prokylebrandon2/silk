@@ -1,17 +1,11 @@
 rules_version = '2';
-// Silk: each signed-in user may read and write only their own two files.
-// Everything in them is already encrypted on the device; these rules just keep strangers out
-// and cap the size. Deploy with: firebase deploy --only storage
+// Retired. Silk used to keep the two encrypted vault files in Firebase Storage; they now live in
+// Supabase Storage (see supabase/storage-policies.sql) and Firebase is used for sign-in only.
+// Deploying these rules closes the old Firebase bucket completely, which is what you want once
+// nothing in it is needed any more: firebase deploy --only storage
+// If an old vault is still in that bucket, download it from the Firebase console first.
 service firebase.storage {
   match /b/{bucket}/o {
-    match /vaults/{uid}/{file} {
-      allow read: if request.auth != null && request.auth.uid == uid
-                  && (file == 'keyslot.skvk' || file == 'vault.skln' || file == 'vault.interim');
-      allow create, update: if request.auth != null && request.auth.uid == uid
-                  && (file == 'keyslot.skvk' || file == 'vault.skln' || file == 'vault.interim')
-                  && request.resource.size < 20 * 1024 * 1024;
-      allow delete: if false;
-    }
     match /{allPaths=**} {
       allow read, write: if false;
     }

@@ -2,7 +2,7 @@
 
 > Silk was called PassVault. The rename is complete: crates, library, Android package and application ID (`app.silk`), classes, docs. Only the old `.pvlt` file format keeps its `PVLT` magic, because old vaults and backups must still open. **Because the application ID changed, Android treats Silk as a new app:** to bring an old PassVault vault over, back it up in the old app, install Silk and use **Restore from backup** on its first screen. Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-An offline Android password manager written in Rust: master password + optional key file, system autofill and TOTP codes. Optional Firebase cloud sync: the only thing that ever leaves the device is the already-encrypted vault.
+An offline Android password manager written in Rust: master password + optional key file, system autofill and TOTP codes. Optional cloud sync (Firebase sign-in, Supabase storage): the only thing that ever leaves the device is the already-encrypted vault.
 
 ## How it's built
 
@@ -64,11 +64,11 @@ It opens the same backup format (Argon2id unwraps the VEK, AES-256-GCM decrypts 
 
 `cd browser-extension && npm test` runs the tests (Argon2 against the RFC 9106 vectors, opening backups and old vault files, RFC 6238 codes, site matching). Needs Node 18 or newer.
 
-## Cloud architecture: the VEK, Kiln and Firebase
+## Cloud architecture: the VEK, Kiln, Firebase and Supabase
 
-The vault uses envelope encryption with Firebase as untrusted storage: the master password goes through Argon2id to a key that only wraps a random **VEK**; the VEK encrypts the vault archive. That archive will be Kiln's `.skln` (Kiln is a separate project and `.skln` is not in it yet), so `core/src/interim.rs` stands in behind the `Archiver` trait until it is.
+The vault uses envelope encryption with Supabase Storage as untrusted storage (Firebase only signs the user in): the master password goes through Argon2id to a key that only wraps a random **VEK**; the VEK encrypts the vault archive. That archive will be Kiln's `.skln` (Kiln is a separate project and `.skln` is not in it yet), so `core/src/interim.rs` stands in behind the `Archiver` trait until it is.
 
-Cloud sync is optional and off until you set up a Firebase project (steps in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Setting up Firebase") and sign in from **More > Cloud sync**. The device always unlocks from its own copy, so offline use never needs the network. After each saved change Silk uploads the two encrypted files (key slot and vault file); **Sync now** also downloads a newer cloud copy. The higher authenticated revision wins, a download goes through the rollback guard, and two vaults that were never linked are never overwritten silently (you are asked which one to keep). The only network code is `android/.../Net.java`, which accepts HTTPS to three Firebase hosts and nothing else. Storage rules: `firebase/storage.rules`.
+Cloud sync is optional and off until you set up a Firebase project and a Supabase project (steps in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), "Setting up the cloud") and sign in from **More > Cloud sync**. The device always unlocks from its own copy, so offline use never needs the network. After each saved change Silk uploads the two encrypted files (key slot and vault file); **Sync now** also downloads a newer cloud copy. The higher authenticated revision wins, a download goes through the rollback guard, and two vaults that were never linked are never overwritten silently (you are asked which one to keep). The only network code is `android/.../Net.java`, which accepts HTTPS to the two Firebase sign-in hosts and your one Supabase project host, and nothing else. Storage policies: `supabase/storage-policies.sql`.
 
 Diagram, formats, the key file layout, what `.skln` needs to provide and the task list: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

@@ -4,7 +4,7 @@
 use crate::bridge;
 use crate::state::{self, AuthHow, Event};
 use crate::{MainWindow, OtpRow, Row, Theme};
-use silk_core::firebase;
+use silk_core::{firebase, supabase};
 use silk_core::keyfile::{KeyFile, Login};
 use silk_core::otp::{self, OtpParams};
 use silk_core::session::{self, Outcome};
@@ -91,11 +91,13 @@ pub fn run(dir: PathBuf) {
         let mut c = ctl.borrow_mut();
         c.settings = Settings::load(&dir);
         c.dir = dir;
-        // Firebase project values from res/values/firebase.xml; None while they are still placeholders.
-        state::set_cloud_config(
-            bridge::firebase_config()
-                .and_then(|(key, bucket)| firebase::Config::new(&key, &bucket)),
-        );
+        // Firebase and Supabase project values; None while any of them is still a placeholder.
+        state::set_cloud_config(bridge::cloud_config().and_then(|(fb_key, url, sb_key)| {
+            Some(state::CloudConfig {
+                firebase: firebase::Config::new(&fb_key)?,
+                supabase: supabase::Config::new(&url, &sb_key)?,
+            })
+        }));
         apply_settings(&ui, &c.settings);
         ui.set_otp_rows(ModelRc::from(c.code_model.clone()));
         c.creating = !state::session().exists();
@@ -600,9 +602,9 @@ fn run_sync(mode: sync::Mode) -> Result<sync::Report, Error> {
     let uid = auth.uid.clone();
     let store = state::session().store()?;
     let http = bridge::JavaHttp;
-    let remote = firebase::FirebaseStore::new(&http, cfg, auth)?;
+    let remote = supabase::SupabaseStore::new(&http, cfg.supabase, cfg.firebase, auth)?;
     let outcome = sync::run(&store, &remote, &uid, mode);
-    // Firebase may have renewed the tokens on the way: keep the newest ones.
+    // The Firebase token may have been renewed on the way: keep the newest ones.
     state::set_auth(Some(remote.auth()));
     outcome
 }
@@ -621,7 +623,7 @@ fn start_resume(c: &mut Ctl, force: bool) -> bool {
         return false; // already signed in as this account
     }
     std::thread::spawn(move || {
-        let result = firebase::refresh(&bridge::JavaHttp, &cfg, &login.email, &login.refresh_token);
+        let result = firebase::refresh(&bridge::JavaHttp, &cfg.firebase, &login.email, &login.refresh_token);
         state::push(Event::CloudAuth {
             how: AuthHow::Resume,
             result,
@@ -637,7 +639,7 @@ fn start_account(ui: &MainWindow, c: &mut Ctl, sign_up: bool) {
     ui.set_notice("".into());
     let Some(cfg) = state::cloud_config() else {
         ui.set_error(
-            "Cloud sync isn't set up in this build. Fill in res/values/firebase.xml first.".into(),
+            "Cloud sync isn't set up in this build. Fill in the Firebase and Supabase values first (see docs/ARCHITECTURE.md).".into(),
         );
         return;
     };
@@ -654,9 +656,9 @@ fn start_account(ui: &MainWindow, c: &mut Ctl, sign_up: bool) {
     std::thread::spawn(move || {
         let http = bridge::JavaHttp;
         let result = if sign_up {
-            firebase::sign_up(&http, &cfg, &email, &password)
+            firebase::sign_up(&http, &cfg.firebase, &email, &password)
         } else {
-            firebase::sign_in(&http, &cfg, &email, &password)
+            firebase::sign_in(&http, &cfg.firebase, &email, &password)
         };
         password.zeroize();
         let how = if sign_up {
@@ -688,7 +690,7 @@ fn update_cloud_ui(ui: &MainWindow, c: &Ctl) {
             format!("Signed in as {e} until Silk closes. Use a Silk key file (create one on the unlock screen) to stay signed in.")
         }
         (Some(e), false, _) => {
-            format!("Signed in as {e}, but Firebase couldn't be reached yet. Unlocking still works from this device's copy.")
+            format!("Signed in as {e}, but the cloud couldn't be reached yet. Unlocking still works from this device's copy.")
         }
     };
     if configured && email.is_some() && c.cloud_dirty {

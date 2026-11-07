@@ -142,6 +142,10 @@ impl RemoteStore for DirStore {
     fn put(&self, object: Object, data: &[u8]) -> Result<(), Error> {
         write_atomic(&self.path(object), data)
     }
+
+    fn delete(&self, object: Object) -> Result<(), Error> {
+        remove_if_exists(&self.path(object))
+    }
 }
 
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, Error> {

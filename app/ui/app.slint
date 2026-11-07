@@ -887,7 +887,7 @@ export component MainWindow inherits Window {
     // 0 nothing, 1 CSV, 2 JSON: which plain-text export is waiting for the "Export anyway" tap
     in-out property <int> export-ask: 0;
 
-    // Cloud sync (Firebase). The app sets the state; the account fields are typed on screen 7.
+    // Cloud sync (Firebase sign-in, Supabase storage). The app sets the state; the account fields are typed on screen 7.
     in property <bool> cloud-configured: false;
     // Signed in, or a sign-in is saved in the key file: shows Sync now and Sign out.
     in property <bool> cloud-linked: false;
@@ -1627,7 +1627,7 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // 7: Cloud account (Firebase sign in or create account)
+            // 7: Cloud account (sign in or create account)
             SilkScreen {
                 active: root.screen == 7;
                 width: parent.width;
@@ -1654,7 +1654,7 @@ export component MainWindow inherits Window {
                             padding: 16px;
                             spacing: 10px;
                             Text {
-                                text: "Your vault is stored in Firebase already encrypted: Firebase never sees your master password or your logins. This account only decides who may download the encrypted files, so give it a password of its own. Silk saves the sign-in (never this password) in your key file.";
+                                text: "Your vault is stored in the cloud already encrypted: neither Firebase (sign-in) nor Supabase (storage) ever sees your master password or your logins. This account only decides who may download the encrypted files, so give it a password of its own. Silk saves the sign-in (never this password) in your key file.";
                                 wrap: word-wrap;
                                 font-size: 14px;
                                 color: Theme.muted;
@@ -1735,4 +1735,4 @@ export component MainWindow inherits Window {
         width: 0px;
         height: 0px;
     }
-}
+}

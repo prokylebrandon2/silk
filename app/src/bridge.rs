@@ -101,17 +101,20 @@ pub fn save_key_file(data: &[u8]) {
     });
 }
 
-/// `(web api key, storage bucket)` from `res/values/firebase.xml`.
-pub fn firebase_config() -> Option<(String, String)> {
+/// `(Firebase web api key, Supabase project URL, Supabase publishable key)`: the first from
+/// `res/values/firebase.xml`, the other two from `android/local.properties` or the environment
+/// (see `android/app/build.gradle.kts`).
+pub fn cloud_config() -> Option<(String, String, String)> {
     let raw = with_env(|e, a| {
         let v = e
-            .call_method(a, "firebaseConfig", "()Ljava/lang/String;", &[])?
+            .call_method(a, "cloudConfig", "()Ljava/lang/String;", &[])?
             .l()?;
         let s: String = e.get_string(&JString::from(v))?.into();
         Ok(s)
     })?;
-    let (key, bucket) = raw.split_once('\n')?;
-    Some((key.to_owned(), bucket.to_owned()))
+    let mut lines = raw.split('\n');
+    let (key, url, publishable) = (lines.next()?, lines.next()?, lines.next()?);
+    Some((key.to_owned(), url.to_owned(), publishable.to_owned()))
 }
 
 /// The core's `Http` trait over `SilkActivity.http` (Java's `HttpURLConnection`). Blocking: call it from a worker thread.

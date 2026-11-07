@@ -1,4 +1,4 @@
-# Silk architecture: Silk, Kiln, VEK and Firebase
+# Silk architecture: Silk, Kiln, VEK, Firebase and Supabase
 
 This is the written form of the flow diagram. Status of each piece is in the task list at the bottom.
 
@@ -14,12 +14,13 @@ This is the written form of the flow diagram. Status of each piece is in the tas
 | **Key slot** | The VEK encrypted by the key, plus the Argon2id settings and salt needed to re-derive it. 91 bytes. | `core/src/keyslot.rs` |
 | **`Archiver`** | The seam between Silk and Kiln: a small trait for "seal entries with the VEK / open them again". | `core/src/archive.rs` |
 | **Interim archiver** | A stand-in implementation of `Archiver` so the cloud flow can be built and tested before `.skln` exists. **Not the `.skln` format**: different magic (`SKIM`) and object name (`vault.interim`). | `core/src/interim.rs` |
-| **Local store** | The on-device copy of the key slot and vault file in the app's private folder. It implements `RemoteStore`, so unlocking from the local copy runs the same flow as unlocking from Firebase will. Also holds the rollback mark. | `core/src/local.rs` |
+| **Local store** | The on-device copy of the key slot and vault file in the app's private folder. It implements `RemoteStore`, so unlocking from the local copy runs the same flow as unlocking from the cloud does. Also holds the rollback mark. | `core/src/local.rs` |
 | **Session** | The unlocked state the app holds (VEK + entries), idle lock, saves to the local store, backup and restore. | `core/src/session.rs` |
 | **Backup** | One `.silk` file: key slot + vault file. | `core/src/backup.rs` |
 | **Silk key file** | The `.key` file the app creates: a 64-byte secret (magic `SKEY`) plus the cloud sign-in that Silk saves after it automatically. Meant to be encrypted inside a `.skln` later (see "The key file"). | `core/src/keyfile.rs` |
-| **Firebase client** | Firebase Auth (email and password) and Storage over HTTPS, behind a one-method `Http` trait that the Java glue implements. | `core/src/firebase.rs`, `android/.../Net.java` |
-| **Sync** | Moves the key slot and vault file between the local store and Firebase by revision. | `core/src/sync.rs` |
+| **Firebase client** | Firebase Auth only (email and password sign-up and sign-in, id tokens and their renewal), over HTTPS behind a one-method `Http` trait that the Java glue implements. | `core/src/firebase.rs`, `android/.../Net.java` |
+| **Supabase client** | Supabase Storage over the same `Http` trait: the two encrypted files per user, as a `RemoteStore`. Authenticated with the Firebase id token. | `core/src/supabase.rs` |
+| **Sync** | Moves the key slot and vault file between the local store and the cloud by revision. | `core/src/sync.rs` |
 | **Legacy vault** | The pre-key-slot `.pvlt` container (`PVLT` magic), where the Argon2id key encrypted the entries directly. Still read for migration and old backups. | `core/src/vault.rs` (`Vault`) |
 
 ## Flow
@@ -108,35 +109,57 @@ vault.pvlt       an old vault, only until the first unlock converts it
 seen.rev         highest vault revision this device has seen
 ```
 
-Silk reads and writes these through the same `RemoteStore` trait the Firebase transport will implement. A save writes the key slot (only if it changed), then the vault file, each through a temporary file and a rename.
+Silk reads and writes these through the same `RemoteStore` trait the Supabase store implements. A save writes the key slot (only if it changed), then the vault file, each through a temporary file and a rename.
 
 **First unlock of an old vault.** If there is no key slot but a `vault.pvlt`, the master password opens the old file, a new VEK is drawn, the key slot and vault file are written, and only then is `vault.pvlt` removed. A wrong password changes nothing. Biometric unlock is switched off at that point, because the Keystore holds the old vault key, not the VEK; the user turns it on again.
 
 **Restoring a backup** accepts a `.silk` bundle or an old `.pvlt` file (kept as `vault.pvlt` and converted on the next unlock). Restoring clears the rollback mark, because it is the one deliberate way to go back to an older vault.
 
-## Firebase layout
+## Cloud layout
 
-Firebase Storage, one folder per signed-in user:
+Firebase signs the user in; Supabase Storage keeps the files. One private bucket, `silk-vaults`, one folder per signed-in user:
 
 ```
-vaults/<uid>/keyslot.skvk
-vaults/<uid>/vault.skln        (vault.interim while the stand-in is in use)
+silk-vaults/vaults/<firebase uid>/keyslot.skvk
+silk-vaults/vaults/<firebase uid>/vault.skln        (vault.interim while the stand-in is in use)
 ```
 
-Rules are in `firebase/storage.rules` (each user reads and writes only their own files, 20 MB cap, no deletes). Everything stored is ciphertext, so Firebase is treated as untrusted storage. Core only sees the `RemoteStore` trait (`core/src/remote.rs`); `core/src/firebase.rs` implements it over HTTPS.
+```
+Silk app --Firebase Auth--> Firebase id token --Authorization: Bearer--> Supabase Storage (private bucket)
+```
+
+**How access is decided.** Supabase is told to trust the Firebase project (Authentication > Sign In / Providers > Third-party). It verifies the id token itself. Then the storage policies in `supabase/storage-policies.sql` compare the token's `sub` (the Firebase uid) with the `<uid>` folder, so a user can only touch their own folder; they also allow only the three known file names and the bucket caps files at 20 MB. The app builds the path from the signed-in account only, never from a separately supplied uid (`core/src/supabase.rs`). The Supabase **publishable** key only identifies the project; it grants nothing by itself. Secret and `service_role` keys are never put in the app, and `supabase::Config` refuses them.
+
+**The `role` claim (still to do).** Supabase treats a Firebase token as a signed-in user only when it carries the custom claim `role: "authenticated"`; without it every request runs as `anon`, and the `authenticated` policies match nothing. Providing that claim needs something with Firebase admin rights (the Admin SDK) that sets it per user, and that must never live in the app. It is not set up yet, so **real cloud sync does not work yet**. Until then Silk reads the claim from its own token and says so ("Cloud sync can't start yet: ...") instead of sending requests that would be misread as "nothing stored yet", which is what starts first-time setup. The vault stays on the device and works normally. When the claim is provisioned, run `supabase/smoke-test.ps1` against the real project before trusting it.
+
+Everything stored is ciphertext, so Supabase is treated as untrusted storage. Core only sees the `RemoteStore` trait (`core/src/remote.rs`: `get`, `put`, `delete`, `exists`); `core/src/supabase.rs` implements it over HTTPS. Uploads create a missing object with `POST` (which refuses to replace anything) and replace an existing one with `PUT`; an object that was just reported missing is never replaced, so a read that was hidden by a policy can't lead to an overwrite.
 
 The device always unlocks from its local copy. `core/src/sync.rs` moves the two objects: after every save the app runs a *push* (upload when this device is ahead), and **More > Sync now** runs a full sync (the higher authenticated revision wins; a download goes through the rollback guard). Only one sync runs at a time; saves that happen meanwhile queue one more push. If the account and the device hold different vaults that were never linked, nothing is copied and the user picks *Keep this device's vault* or *Use the cloud vault*. A download locks the open vault, because what was in memory is stale.
 
-The Firebase account (who may download the files) and the master password (who can decrypt them) are separate. Anyone who can download the two files can try passwords offline, so Argon2id cost and password strength are what protect the vault if the Firebase account is compromised.
+The cloud account (who may download the files) and the master password (who can decrypt them) are separate. Anyone who can download the two files can try passwords offline, so Argon2id cost and password strength are what protect the vault if the account is compromised.
 
-## Setting up Firebase
+## Setting up the cloud
 
-1. Create a project in the Firebase console. Under **Authentication > Sign-in method** enable **Email/Password**.
-2. Under **Storage**, create the default bucket.
-3. Deploy the rules: `firebase deploy --only storage` (they are in `firebase/storage.rules`; `firebase/firebase.json` points at them).
-4. Put the project's **Web API key** (Project settings) and the **bucket name** (Storage > Files, for example `my-project.firebasestorage.app`) into `android/app/src/main/res/values/firebase.xml`. The Web API key identifies the project and is not a secret; the rules and the account decide who can read what.
-5. Build. While either value still starts with `YOUR_`, the app shows "Cloud sync isn't set up" and stays offline.
-6. In the app: **More > Cloud sync > Sign in or create account.** Use a Silk key file (create one on the unlock screen) so the sign-in is saved and the next start signs in by itself.
+1. **Firebase** (sign-in only, Spark plan). Create a project. Under **Authentication > Sign-in method** enable **Email/Password**. No Storage bucket is needed any more; if you made one, deploy the closing rules with `firebase deploy --only storage` once you have saved anything you still need from it.
+2. **Supabase** (Free plan). Create a project and a **private** bucket `silk-vaults`. Under **Authentication > Sign In / Providers > Third-party** add your Firebase project. Then run `supabase/storage-policies.sql` in the SQL editor (part 1 reads, part 2 replaces the policies).
+3. **Configure the app.** The Firebase Web API key goes into `android/app/src/main/res/values/firebase.xml` (it is not a secret). The Supabase values go into `android/local.properties`, which git ignores:
+
+   ```powershell
+   cd C:\Users\Kyliee\Documents\GitHub\silk-rust
+   notepad android\local.properties
+   ```
+
+   Add (keeping any `sdk.dir=` line that is already there):
+
+   ```
+   SUPABASE_URL=https://<project-ref>.supabase.co
+   SUPABASE_PUBLISHABLE_KEY=<the publishable key>
+   ```
+
+   CI can pass the same two names as environment variables. Only the **publishable** key belongs here; if the build is given a `sb_secret_...` or `service_role` key, the app refuses to use it.
+4. Build. While any of the three values is still a `YOUR_` placeholder, the app shows "Cloud sync isn't set up" and stays offline.
+5. In the app: **More > Cloud sync > Sign in or create account.** Use a Silk key file (create one on the unlock screen) so the sign-in is saved and the next start signs in by itself.
+6. After the `role` claim is provisioned: `powershell -ExecutionPolicy Bypass -File .\supabase\smoke-test.ps1` (read-only), then with `-Write` for an upload, replace and delete round trip.
 
 ## Known limits (by design, for now)
 
@@ -144,7 +167,7 @@ The Firebase account (who may download the files) and the master password (who c
 - **No VEK rotation.** Changing the password re-wraps the same VEK. Rotating it needs the key slot and the vault file to change together, which two separate uploads can't do atomically.
 - **No merge.** Two devices saving from the same revision: sync reports a conflict and copies nothing; the next save on either device gets the next revision and then wins.
 - **Upload order** is key slot first, then vault file, so a half-finished first-time setup leaves a slot without a vault file (accepted as an empty vault), never a vault file nobody can open.
-- **Cloud sync is optional.** Without Firebase project values in `res/values/firebase.xml` the app stays fully offline (it still declares `INTERNET`, but `Net.java` only accepts HTTPS to three Firebase hosts and nothing else).
+- **Cloud sync is optional.** Without the Firebase and Supabase values (`res/values/firebase.xml`, `android/local.properties`) the app stays fully offline (it still declares `INTERNET`, but `Net.java` only accepts HTTPS to the two Firebase sign-in hosts and the one configured Supabase host, and nothing else).
 - **The sign-in in the key file is not encrypted yet** (see "The key file").
 - **Real vaults are now written in the interim format** (`vault.interim`, magic `SKIM`). When `.skln` arrives, `interim.rs` cannot simply be deleted: it has to stay as a read-only source so existing vaults can be converted to `.skln` on unlock (the two have different file names, so telling them apart is easy). The same goes for the backup bundle, which embeds whichever vault file is current.
 
@@ -167,11 +190,11 @@ Left on purpose:
 | 2 | `Archiver` trait + interim stand-in archive (`archive.rs`, `interim.rs`) | done |
 | 3 | Key slot: Argon2id key wraps the VEK (`keyslot.rs`) | done |
 | 4 | `CloudVault` flow: setup, unlock, save, change password, legacy `.pvlt` migration, VEK export for biometrics, `RemoteStore` trait (`cloud.rs`, `remote.rs`) | done |
-| 5 | Firebase layout and security rules (`firebase/storage.rules`) | done |
+| 5 | Cloud layout and access policies (`supabase/storage-policies.sql`; `firebase/storage.rules` is now a deny-all for the retired Firebase bucket) | done on paper; policies not yet run against the live project by the author |
 | 6 | **Kiln repo (yours):** add `.skln` with the contract above | todo |
 | 7 | Add a Kiln-backed `Archiver`, switch `archive::Current`, convert interim vaults to `.skln` on unlock (keep `interim.rs` as the reader); move Silk's CI toolchain if needed | todo, after 6 |
 | 8 | Session uses `CloudVault`: local copy of key slot + vault file in private storage (offline unlock), migrate `vault.pvlt` on first unlock (`local.rs`, `session.rs`, `backup.rs`) | done, untested on a device |
-| 9 | Firebase transport: Firebase Auth + Storage over HTTPS in the Java glue (`Net.java`), `RemoteStore` over an `Http` trait in Rust (`firebase.rs`), `INTERNET` permission, project config (`firebase.xml`) | done, untested on a device |
+| 9 | Cloud transport: Firebase Auth (`firebase.rs`) and Supabase Storage (`supabase.rs`, a `RemoteStore`) over an `Http` trait, carried by the Java glue (`Net.java`); `INTERNET` permission; project config (`firebase.xml`, `local.properties`) | done with mocked tests; **not tested against live Supabase** (blocked on task 17), untested on a device |
 | 10 | Biometric unlock wraps the VEK (`export_vek` / `unlock_with_vek`) instead of the old vault key | done (stale keys are detected and reset) |
 | 11 | Sync safety: rollback detection from the revision, conflict handling (`sync.rs`: unrelated vaults and same-revision saves are never overwritten silently), VEK rotation with an atomic commit | partly: rollback guard and conflict handling done; rotation todo |
 | 12 | UI: first-time setup vs unlock, sync status, change password, migration prompt | partly: setup/unlock, a migration notice and the Cloud sync screens (sign in, sync status, Sync now, keep-or-use choice) exist; change password todo |
@@ -179,3 +202,4 @@ Left on purpose:
 | 14 | The deeper PassVault to Silk rename (package, crates, library) | done, see above |
 | 15 | Silk key file (`SKEY`) and automatic saving of the cloud sign-in in it (`keyfile.rs`, `ui.rs`, `SilkActivity.saveKeyFile`) | done, untested on a device |
 | 16 | **Kiln repo (yours):** security update and encryption engine, then encrypt the `.key` file inside a `.skln` | todo, after the Kiln security update; Silk's side is a later update |
+| 17 | Provision the Firebase custom claim `role: authenticated` (server-side, never in the app), then run `supabase/smoke-test.ps1` | todo; postponed on purpose |

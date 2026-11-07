@@ -2,6 +2,20 @@ plugins {
     id("com.android.application")
 }
 
+// Supabase project values. They come from the environment (CI) or android/local.properties, which is
+// git-ignored, so nothing project-specific is committed. Both are public client values (the project
+// URL and the *publishable* key). Never put a secret or service_role key here: Silk refuses to use one,
+// and anything in the APK can be read by anyone. A missing value becomes a YOUR_ placeholder, which
+// keeps cloud sync off (the app stays fully offline).
+val localProps = java.util.Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.isFile) f.inputStream().use { load(it) }
+}
+fun cloudValue(name: String): String =
+    System.getenv(name)?.takeIf { it.isNotBlank() }
+        ?: localProps.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: "YOUR_$name"
+
 android {
     namespace = "app.silk"
     compileSdk = 35
@@ -14,7 +28,10 @@ android {
         versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
         versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
         ndk { abiFilters += "arm64-v8a" }
+        resValue("string", "supabase_url", cloudValue("SUPABASE_URL").trim())
+        resValue("string", "supabase_publishable_key", cloudValue("SUPABASE_PUBLISHABLE_KEY").trim())
     }
+    buildFeatures { resValues = true }
 
     // Release signing comes from env vars set by the GitHub workflow; without them the release is unsigned.
     val keystorePath: String? = System.getenv("KEYSTORE_PATH")
