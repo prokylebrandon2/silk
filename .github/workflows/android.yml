@@ -1,3 +1,4 @@
+
 name: Android CI
 
 on:
@@ -24,24 +25,32 @@ jobs:
     name: Core tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: true
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Bloat check (see CLAUDE.md)
-        run: bash scripts/check-bloat.sh
-
-      - name: Test the core crate
+      - name: Configure private Git dependencies
         env:
           KILN_READ_TOKEN: ${{ secrets.KILN_READ_TOKEN }}
-          CARGO_NET_GIT_FETCH_WITH_CLI: true
         run: |
+          if [ -z "$KILN_READ_TOKEN" ]; then
+            echo "::error::Missing KILN_READ_TOKEN repository secret. It needs read access to kiln-rust."
+            exit 1
+          fi
+
           git config --global \
             url."https://x-access-token:${KILN_READ_TOKEN}@github.com/".insteadOf \
             "https://github.com/"
 
-          cargo test -p silk-core
+      - name: Bloat check (see CLAUDE.md)
+        run: bash scripts/check-bloat.sh
+
+      - name: Test the core crate
+        run: cargo test -p silk-core
+
   # The Brave/Chrome extension: Argon2id against the RFC 9106 vectors, vault opening, TOTP vectors.
   extension:
     name: Browser extension
@@ -69,15 +78,29 @@ jobs:
     needs: core
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # Public client values (project URL and publishable key). local.properties does not exist in CI, so
-    # without these the APK is built with cloud sync switched off. Empty on fork PRs: sync stays off there.
     env:
+      # Public client values (project URL and publishable key).
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      CARGO_NET_GIT_FETCH_WITH_CLI: true
     permissions:
       contents: write # lets tagged builds publish a GitHub Release
     steps:
       - uses: actions/checkout@v7
+
+      # Each job runs on its own runner, so configure private Git access again here.
+      - name: Configure private Git dependencies
+        env:
+          KILN_READ_TOKEN: ${{ secrets.KILN_READ_TOKEN }}
+        run: |
+          if [ -z "$KILN_READ_TOKEN" ]; then
+            echo "::error::Missing KILN_READ_TOKEN repository secret. It needs read access to kiln-rust."
+            exit 1
+          fi
+
+          git config --global \
+            url."https://x-access-token:${KILN_READ_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
 
       - uses: actions/setup-java@v6
         with:
