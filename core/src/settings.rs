@@ -15,6 +15,8 @@ pub struct Settings {
     pub generator: GenOptions,
     /// Put a generated password into the form when a new login is started.
     pub auto_generate: bool,
+    /// Let screenshots, screen recording and the recent-apps preview show Silk (off by default).
+    pub allow_screenshots: bool,
 }
 
 impl Default for Settings {
@@ -22,6 +24,7 @@ impl Default for Settings {
         Settings {
             generator: GenOptions::default(),
             auto_generate: true,
+            allow_screenshots: false,
         }
     }
 }
@@ -36,6 +39,7 @@ impl Settings {
             Some(s) => Settings {
                 generator: s.generator.normalized(),
                 auto_generate: s.auto_generate,
+                allow_screenshots: s.allow_screenshots,
             },
             None => Settings::default(),
         }
@@ -81,6 +85,7 @@ mod tests {
         s.generator.length = 32;
         s.generator.symbols = false;
         s.auto_generate = false;
+        s.allow_screenshots = true;
         s.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), s);
     }

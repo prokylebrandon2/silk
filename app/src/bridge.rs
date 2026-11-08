@@ -193,6 +193,19 @@ pub fn is_dark() -> bool {
     call_bool("isDark")
 }
 
+/// Allows or blocks screenshots, screen recording and the recent-apps preview (`FLAG_SECURE`).
+pub fn set_screenshots_allowed(allow: bool) {
+    with_env(|e, a| {
+        e.call_method(
+            a,
+            "setScreenshotsAllowed",
+            "(Z)V",
+            &[JValue::Bool(allow as u8)],
+        )
+        .map(|_| ())
+    });
+}
+
 pub fn app_version() -> String {
     with_env(|e, a| {
         let v = e

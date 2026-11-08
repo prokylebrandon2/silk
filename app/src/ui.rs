@@ -66,6 +66,8 @@ struct Ctl {
     cloud_dirty: bool,
     /// The user asked for the sync in flight, so its result is announced. Background pushes stay quiet.
     explicit: bool,
+    /// The Cloud account screen was opened from the lock screen (no vault open yet): it returns there.
+    cloud_from_lock: bool,
 }
 
 type Shared = Rc<RefCell<Ctl>>;
@@ -100,6 +102,8 @@ pub fn run(dir: PathBuf) {
         ui.set_otp_rows(ModelRc::from(c.code_model.clone()));
         c.creating = !state::session().exists();
         c.auth_mode = bridge::is_autofill_request();
+        // Blocked until the setting says otherwise, and always on the autofill unlock screen.
+        bridge::set_screenshots_allowed(c.settings.allow_screenshots && !c.auth_mode);
         ui.set_creating(c.creating);
         c.bio_enrolled = bridge::bio_enrolled();
         ui.set_bio_available(bridge::bio_available());
@@ -255,7 +259,7 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         };
         let result = state::session().upsert(entry);
         if result.is_ok() {
-            auto_backup();
+            auto_backup(&mut c);
         }
         match result {
             Ok(()) => {
@@ -271,7 +275,7 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         if let Some(id) = c.editing.take() {
             let result = state::session().remove(&id);
             if result.is_ok() {
-                auto_backup();
+                auto_backup(&mut c);
             }
             match result {
                 Ok(()) => {}
@@ -318,11 +322,18 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
             ui.set_error("".into());
             ui.set_notice("".into());
             ui.set_export_ask(0);
+            if screen == 7 && c.auth_mode {
+                return; // the autofill unlock screen never uses the network
+            }
+            c.cloud_from_lock = screen == 7 && ui.get_screen() == 0;
             match screen {
                 1 => refresh_rows(&ui, &ui.get_query()),
                 3 => refresh_codes(&mut c),
                 4 => show_preview(&ui, &c.settings.generator),
                 _ => {}
+            }
+            if screen == 7 {
+                update_cloud_ui(&ui, &c);
             }
             ui.set_screen(screen);
         });
@@ -372,7 +383,7 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         };
         let result = state::session().upsert(entry);
         if result.is_ok() {
-            auto_backup();
+            auto_backup(&mut c);
         }
         match result {
             Ok(()) => {
@@ -414,6 +425,14 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         bridge::copy(&ui.get_gen_preview());
         ui.set_notice("Copied. It is cleared from the clipboard after 5 minutes.".into());
     });
+    handler!(ui, ctl, on_screenshots_changed, |ui, c| {
+        state::touch();
+        c.settings.allow_screenshots = ui.get_allow_screenshots();
+        bridge::set_screenshots_allowed(c.settings.allow_screenshots && !c.auth_mode);
+        if let Err(e) = c.settings.save(&c.dir) {
+            ui.set_error(e.to_string().into());
+        }
+    });
 
     // ---- cloud account and sync ----
     handler!(ui, ctl, on_cloud_sign_in, |ui, c| {
@@ -432,6 +451,8 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         c.login = None;
         c.cloud_choice = false;
         c.cloud_dirty = false;
+        c.cloud_busy = false;
+        c.explicit = false;
         persist_login(&mut c); // removes the sign-in section from the key file
         update_cloud_ui(&ui, &c);
         ui.set_error("".into());
@@ -527,13 +548,17 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
 
 /// After every saved change: copies the encrypted backup (key slot + vault file) to the file chosen
 /// with Backup or Restore, if there is one, and uploads to the cloud when signed in.
-fn auto_backup() {
+fn auto_backup(c: &mut Ctl) {
     let bytes = state::session().read_backup();
     if let Ok(b) = bytes {
         bridge::auto_backup(&b);
     }
     if state::signed_in() {
         start_sync(sync::Mode::Push);
+    } else {
+        // Signed in earlier (saved in the key file) but the session wasn't renewed yet, say after an offline
+        // unlock: renew it now. A renewed session pushes by itself.
+        start_resume(c, false);
     }
 }
 
@@ -603,7 +628,7 @@ fn run_sync(mode: sync::Mode) -> Result<sync::Report, Error> {
     let remote = supabase::SupabaseStore::new(&http, cfg, auth)?;
     let outcome = sync::run(&store, &remote, &uid, mode);
     // The access token may have been renewed on the way: keep the newest ones.
-    state::set_auth(Some(remote.auth()));
+    state::renew_auth(remote.auth());
     outcome
 }
 
@@ -704,6 +729,7 @@ fn update_cloud_ui(ui: &MainWindow, c: &Ctl) {
     ui.set_cloud_status(status.into());
     ui.set_cloud_busy(c.cloud_busy);
     ui.set_cloud_choice(c.cloud_choice);
+    ui.set_cloud_from_lock(c.cloud_from_lock);
 }
 
 /// The cloud vault replaced the local copy. What is open in memory is stale, so it is locked.
@@ -738,6 +764,10 @@ fn handle_cloud_auth(
 ) {
     let explicit = std::mem::take(&mut c.explicit);
     match (how, result) {
+        // Signed out while the renewal was in flight: stay signed out.
+        (AuthHow::Resume, Ok(_)) if c.login.is_none() => {
+            c.cloud_busy = false;
+        }
         (AuthHow::Resume, Ok(auth)) => {
             let login = auth.login();
             if c.login.as_ref() != Some(&login) {
@@ -794,7 +824,13 @@ fn handle_cloud_auth(
                 }
                 .into(),
             );
-            ui.set_screen(5);
+            // From the lock screen the vault is still locked: go back there, not to More.
+            if c.cloud_from_lock {
+                c.cloud_from_lock = false;
+                ui.set_screen(0);
+            } else {
+                ui.set_screen(5);
+            }
             // Link this device to the account. Anything that needs a decision is reported by the result.
             start_sync(sync::Mode::Sync);
         }
@@ -818,6 +854,9 @@ fn handle_synced(
         Ok(report) => {
             c.cloud_dirty = false;
             match report {
+                sync::Report::UpToDate if ui.get_screen() == 0 && c.creating => ui.set_notice(
+                    "Signed in. This account has no vault yet. Create yours below and it uploads to the cloud.".into(),
+                ),
                 sync::Report::UpToDate if explicit => ui.set_notice("Already up to date.".into()),
                 sync::Report::Uploaded if explicit => ui.set_notice("Synced. The cloud copy is up to date.".into()),
                 sync::Report::UpToDate | sync::Report::Uploaded => {}
@@ -835,10 +874,13 @@ fn handle_synced(
             }
         }
         Err(Error::SignedOut) => {
+            let was_signed_in = c.login.is_some() || state::signed_in();
             state::set_auth(None);
             c.login = None;
             persist_login(c);
-            ui.set_error(Error::SignedOut.to_string().into());
+            if was_signed_in {
+                ui.set_error(Error::SignedOut.to_string().into());
+            }
         }
         Err(e) => {
             if explicit {
@@ -888,7 +930,10 @@ fn start_timer(timer: &slint::Timer, ui: &MainWindow, ctl: &Shared) {
                 handle_event(&ui, &mut c, ev);
             }
             // The session locks itself when idle; bring the UI back to the unlock screen.
-            if ui.get_screen() != 0 && !state::session().is_unlocked() {
+            if ui.get_screen() != 0
+                && !(ui.get_screen() == 7 && c.cloud_from_lock)
+                && !state::session().is_unlocked()
+            {
                 lock_ui(&ui, &mut c);
             }
             if ui.get_screen() == 0 && c.bio_enrolled && !c.bio_prompted {
@@ -919,6 +964,7 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
             ui.set_pw1("".into());
             ui.set_pw2("".into());
             ui.set_error("".into());
+            let was_creating = c.creating;
             c.creating = false;
             ui.set_creating(false);
             if c.auth_mode {
@@ -932,6 +978,8 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
                 if state::auth().is_none() {
                     // Offline at the lock screen, say: try the saved sign-in again now that the vault is open.
                     start_resume(c, false);
+                } else if was_creating {
+                    start_sync(sync::Mode::Push); // a vault created while signed in goes to the cloud right away
                 }
             }
         }
@@ -1195,6 +1243,7 @@ fn apply_settings(ui: &MainWindow, s: &Settings) {
     ui.set_gen_symbols(g.symbols);
     ui.set_gen_lookalikes(g.avoid_lookalikes);
     ui.set_auto_generate(s.auto_generate);
+    ui.set_allow_screenshots(s.allow_screenshots);
     show_preview(ui, g);
 }
 
@@ -1299,7 +1348,7 @@ fn clear_auth(ui: &MainWindow, c: &mut Ctl) {
 fn finish_import(ui: &MainWindow, c: &mut Ctl, imp: transfer::Imported) {
     let result = state::session().merge_entries(imp.entries);
     if result.is_ok() {
-        auto_backup();
+        auto_backup(c);
     }
     match result {
         Ok((added, dups)) => {

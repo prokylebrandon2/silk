@@ -896,6 +896,7 @@ export component MainWindow inherits Window {
     in-out property <bool> gen-symbols: true;
     in-out property <bool> gen-lookalikes: true;
     in-out property <bool> auto-generate: true;
+    in-out property <bool> allow-screenshots: false;
     in property <string> gen-preview: "";
     in property <string> gen-strength: "";
 
@@ -909,6 +910,8 @@ export component MainWindow inherits Window {
     in property <bool> cloud-busy: false;
     // This device and the cloud account hold different vaults: ask which one to keep.
     in property <bool> cloud-choice: false;
+    // The Cloud account screen was opened from the lock screen: Back returns there.
+    in property <bool> cloud-from-lock: false;
     in property <string> cloud-status: "";
     in-out property <string> cloud-email: "";
     in-out property <string> cloud-pw: "";
@@ -951,6 +954,7 @@ export component MainWindow inherits Window {
     callback save-authenticator();
     callback back-codes();
     callback gen-changed();
+    callback screenshots-changed();
     callback gen-regenerate();
     callback gen-copy();
     callback import-proton();
@@ -962,7 +966,7 @@ export component MainWindow inherits Window {
     property <length> form-height: 700px + (root.otp-code != "" ? 140px : 0px) + (root.otp-invalid ? 46px : 0px) + (root.error != "" ? 64px : 0px);
     property <length> auth-height: 560px + (root.a-code != "" ? 140px : 0px) + (root.a-invalid ? 46px : 0px) + (root.error != "" ? 64px : 0px);
     property <length> gen-height: 868px + gen-banner.wanted;
-    property <length> more-height: 662px + (root.export-ask != 0 ? 200px : 0px) + (root.bio-available ? 106px : 0px) + more-banner.wanted + 170px + (root.cloud-linked ? 66px : 0px) + (root.cloud-choice ? 292px : 0px);
+    property <length> more-height: 768px + (root.export-ask != 0 ? 200px : 0px) + (root.bio-available ? 80px : 0px) + more-banner.wanted + 170px + (root.cloud-linked ? 66px : 0px) + (root.cloud-choice ? 292px : 0px);
     property <length> cloud-height: 560px + (root.error != "" ? 64px : 0px);
 
     // A fresh generated password flashes in.
@@ -992,10 +996,10 @@ export component MainWindow inherits Window {
                 Flickable {
                     width: parent.width;
                     height: parent.height;
-                    content-height: max(root.height, 780px);
+                    content-height: max(root.height, 780px + (root.creating && root.cloud-configured ? 40px : 0px));
                     VerticalLayout {
                         width: root.width;
-                        height: max(root.height, 780px);
+                        height: max(root.height, 780px + (root.creating && root.cloud-configured ? 40px : 0px));
                         alignment: start;
                         padding: 24px;
                         padding-top: 32px + root.safe-area-insets.top;
@@ -1059,6 +1063,7 @@ export component MainWindow inherits Window {
                         }
                         if root.creating : SilkLink { text: "Create a new key file"; clicked => { root.create-key-file(); } }
                         if root.creating : SilkLink { text: "Restore from backup"; clicked => { root.restore-backup(); } }
+                        if root.creating && root.cloud-configured : SilkLink { text: "Sign in to get your vault from the cloud"; clicked => { root.go(7); } }
                         SilkBanner { error: root.error; notice: root.notice; }
                         SilkButton {
                             text: root.creating ? "Create vault" : "Unlock vault";
@@ -1550,7 +1555,7 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if root.bio-available : SectionLabel { text: "SECURITY"; }
+                        SectionLabel { text: "SECURITY"; }
                         if root.bio-available : Rectangle {
                             height: 68px;
                             border-radius: Theme.r-card;
@@ -1565,6 +1570,22 @@ export component MainWindow inherits Window {
                                 hint: "Fingerprint or face instead of the master password";
                                 checked <=> root.bio-enrolled;
                                 toggled => { root.bio-set(root.bio-enrolled); }
+                            }
+                        }
+                        Rectangle {
+                            height: 68px;
+                            border-radius: Theme.r-card;
+                            background: Theme.card;
+                            border-width: 1px;
+                            border-color: Theme.outline;
+                            SilkToggle {
+                                x: 4px;
+                                y: 0px;
+                                width: parent.width - 8px;
+                                label: "Allow screenshots";
+                                hint: "Off blocks screenshots and recordings";
+                                checked <=> root.allow-screenshots;
+                                toggled => { root.screenshots-changed(); }
                             }
                         }
 
@@ -1648,7 +1669,7 @@ export component MainWindow inherits Window {
                         padding-left: 8px;
                         padding-right: 8px;
                         spacing: 4px;
-                        SilkLink { text: "Back"; clicked => { root.go(5); } }
+                        SilkLink { text: "Back"; clicked => { root.go(root.cloud-from-lock ? 0 : 5); } }
                         Text { text: "Cloud account"; font-size: 20px; font-weight: 600; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
                     }
                     Flickable {

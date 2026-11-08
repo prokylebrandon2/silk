@@ -103,6 +103,15 @@ pub fn set_auth(auth: Option<Auth>) {
     cloud().auth = auth;
 }
 
+/// Keeps renewed tokens, but only while that same account is still signed in: a sign-out that happened
+/// while a sync was running stays a sign-out.
+pub fn renew_auth(auth: Auth) {
+    let mut c = cloud();
+    if c.auth.as_ref().map_or(false, |a| a.uid == auth.uid) {
+        c.auth = Some(auth);
+    }
+}
+
 /// A copy of the current account session (tokens are wiped when the copy drops).
 pub fn auth() -> Option<Auth> {
     cloud().auth.clone()

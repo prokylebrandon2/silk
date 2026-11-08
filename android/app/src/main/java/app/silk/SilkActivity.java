@@ -67,6 +67,17 @@ public class SilkActivity extends NativeActivity {
         super.onCreate(state);
     }
 
+    /** Rust calls this once the saved setting is read (and when it is toggled). FLAG_SECURE stays on until then. */
+    public void setScreenshotsAllowed(final boolean allow) {
+        runOnUiThread(() -> {
+            if (allow) {
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            } else {
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            }
+        });
+    }
+
     // ---- document picker ----
 
     public void pickFile(final int code) {
