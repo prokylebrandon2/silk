@@ -109,6 +109,13 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
+      - name: Let cargo fetch the private Kiln repo
+        env:
+          KILN_READ_TOKEN: ${{ secrets.KILN_READ_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${KILN_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
       - name: Build the Rust library for Android
         env:
           RUSTFLAGS: "-C link-arg=-Wl,--icf=all -C link-arg=-Wl,--pack-dyn-relocs=android"
