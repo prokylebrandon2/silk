@@ -429,11 +429,9 @@ Silk uses envelope encryption with Supabase Auth and Supabase Storage.
 
 The master password derives a key that protects the VEK. The VEK then encrypts the vault archive.
 
-In the planned final architecture, the archive will use Kiln's `.skln` format. Kiln is a separate project, and `.skln` support is not implemented in Kiln yet.
+The vault archive uses Kiln's `.skln` format, through the `kiln-skln` crate from the separate Kiln project. `core/src/skln.rs` connects it to the `Archiver` trait. Vault files of the older stand-in format (`core/src/interim.rs`) are still opened and are rewritten as `.skln` the first time they are unlocked.
 
-For now, `core/src/interim.rs` provides the temporary archive implementation behind the `Archiver` trait. This allows Silk to use the future archive interface without depending on the unfinished `.skln` format.
-
-The architecture diagram, file formats, key file layout, `.skln` requirements, and remaining implementation tasks are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The architecture diagram, file formats, key file layout, `.skln` details, and remaining implementation tasks are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Building Silk
 

@@ -5,7 +5,7 @@
 -- This file has not been run against a live project by the author: read it before you run it.
 --
 -- Files Silk stores, per user:   vaults/<user id>/keyslot.skvk
---                                vaults/<user id>/vault.interim   (vault.skln once Kiln's format exists)
+--                                vaults/<user id>/vault.skln
 -- Everything in them is already encrypted on the device.
 --
 -- Users sign in with Supabase Auth (email and password, done by the app), so their token already has
@@ -70,7 +70,7 @@ create policy "silk: read own vault files" on storage.objects
     and array_length(storage.foldername(name), 1) = 2
     and (storage.foldername(name))[1] = 'vaults'
     and (storage.foldername(name))[2] = (select auth.jwt() ->> 'sub')
-    and storage.filename(name) in ('keyslot.skvk', 'vault.interim', 'vault.skln')
+    and storage.filename(name) in ('keyslot.skvk', 'vault.skln')
   );
 
 create policy "silk: create own vault files" on storage.objects
@@ -80,7 +80,7 @@ create policy "silk: create own vault files" on storage.objects
     and array_length(storage.foldername(name), 1) = 2
     and (storage.foldername(name))[1] = 'vaults'
     and (storage.foldername(name))[2] = (select auth.jwt() ->> 'sub')
-    and storage.filename(name) in ('keyslot.skvk', 'vault.interim', 'vault.skln')
+    and storage.filename(name) in ('keyslot.skvk', 'vault.skln')
   );
 
 create policy "silk: replace own vault files" on storage.objects
@@ -90,14 +90,14 @@ create policy "silk: replace own vault files" on storage.objects
     and array_length(storage.foldername(name), 1) = 2
     and (storage.foldername(name))[1] = 'vaults'
     and (storage.foldername(name))[2] = (select auth.jwt() ->> 'sub')
-    and storage.filename(name) in ('keyslot.skvk', 'vault.interim', 'vault.skln')
+    and storage.filename(name) in ('keyslot.skvk', 'vault.skln')
   )
   with check (
     bucket_id = 'silk-vaults'
     and array_length(storage.foldername(name), 1) = 2
     and (storage.foldername(name))[1] = 'vaults'
     and (storage.foldername(name))[2] = (select auth.jwt() ->> 'sub')
-    and storage.filename(name) in ('keyslot.skvk', 'vault.interim', 'vault.skln')
+    and storage.filename(name) in ('keyslot.skvk', 'vault.skln')
   );
 
 create policy "silk: delete own vault files" on storage.objects
@@ -107,7 +107,7 @@ create policy "silk: delete own vault files" on storage.objects
     and array_length(storage.foldername(name), 1) = 2
     and (storage.foldername(name))[1] = 'vaults'
     and (storage.foldername(name))[2] = (select auth.jwt() ->> 'sub')
-    and storage.filename(name) in ('keyslot.skvk', 'vault.interim', 'vault.skln')
+    and storage.filename(name) in ('keyslot.skvk', 'vault.skln')
   );
 
 -- ============================================================ PART 3: check the policies (optional)

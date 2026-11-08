@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 MAX_FILE_KB=512        # one tracked file (the 1024 px icon master is the largest, ~410 KB)
 MAX_TRACKED_KB=2048    # all tracked files together (about 1.2 MB today)
 MAX_LOCK_PACKAGES=560  # packages in Cargo.lock (545 today, nearly all of them Slint's)
-MAX_CORE_CRATES=55     # crates silk-core pulls in at run time (51 today)
+MAX_CORE_CRATES=56     # crates silk-core pulls in at run time (51 before kiln-skln, which adds five)
 # Crates that mean "a second way of doing something we already do". All network goes through the
 # `Http` trait in core/src/auth.rs and android/.../Net.java.
 FORBIDDEN_CRATES="reqwest hyper ureq openssl native-tls rustls curl clap anyhow rand serde_yaml async-std"

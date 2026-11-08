@@ -3,8 +3,11 @@
 # Format:  <crate dir>: name name name ...      (names as written in that crate's Cargo.toml)
 
 # silk-core: crypto and parsing only. No network, no async, no HTTP client, no unsafe code.
-core: aes-gcm argon2 getrandom hmac serde serde_json sha1 sha2 zeroize
+core: aes-gcm argon2 getrandom hmac kiln-skln serde serde_json sha1 sha2 zeroize
 #   aes-gcm, argon2, sha2, hmac, sha1  the vault, key slot and TOTP (RFC 6238 needs HMAC-SHA1/256/512)
+#   kiln-skln                          Kiln's .skln container (the vault file): bytes in, bytes out, no
+#                                      network or async. Brings chacha20poly1305 and hkdf with it, which
+#                                      is why MAX_CORE_CRATES in check-bloat.sh went up by five.
 #   getrandom                          random bytes on Android and desktop alike
 #   serde, serde_json                  entries, settings, key-file login, Supabase replies
 #   zeroize                            wipe keys and passwords

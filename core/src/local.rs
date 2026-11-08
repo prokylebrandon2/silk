@@ -8,7 +8,9 @@
 //! Files in the folder:
 //! ```text
 //! keyslot.skvk     the key slot (VEK wrapped by the Argon2id key)
-//! vault.interim    the vault file (vault.skln once Kiln's archive is in)
+//! vault.skln       the vault file (Kiln's `.skln`)
+//! vault.interim    a vault file of the stand-in format that came before; read when there is no vault.skln,
+//!                  and removed when the next save writes vault.skln
 //! vault.pvlt       a vault from before the key slot existed; converted on first unlock, then removed
 //! seen.rev         the highest vault revision this device has seen (rollback guard)
 //! sync.uid         the cloud account this copy was last synced with (see `sync`)
@@ -23,6 +25,8 @@ use std::path::{Path, PathBuf};
 
 /// The vault file of the old, pre-key-slot format.
 pub const LEGACY_FILE: &str = "vault.pvlt";
+/// The vault file of the stand-in format that came before `.skln` (see `interim`).
+const INTERIM_FILE: &str = "vault.interim";
 const SEEN_FILE: &str = "seen.rev";
 const LINK_FILE: &str = "sync.uid";
 
@@ -48,8 +52,12 @@ impl DirStore {
         self.dir.join(LEGACY_FILE)
     }
 
+    fn interim_path(&self) -> PathBuf {
+        self.dir.join(INTERIM_FILE)
+    }
+
     pub fn has(&self, object: Object) -> bool {
-        self.path(object).is_file()
+        self.path(object).is_file() || (object == Object::Archive && self.interim_path().is_file())
     }
 
     pub fn has_legacy(&self) -> bool {
@@ -57,7 +65,11 @@ impl DirStore {
     }
 
     pub fn remove(&self, object: Object) -> Result<(), Error> {
-        remove_if_exists(&self.path(object))
+        remove_if_exists(&self.path(object))?;
+        if object == Object::Archive {
+            remove_if_exists(&self.interim_path())?;
+        }
+        Ok(())
     }
 
     pub fn read_legacy(&self) -> Result<Option<Vec<u8>>, Error> {
@@ -135,16 +147,28 @@ impl DirStore {
 }
 
 impl RemoteStore for DirStore {
+    /// The vault file falls back to a stand-in `vault.interim` when there is no `vault.skln` yet.
+    /// Whatever archiver reads the bytes tells the two formats apart by their magic.
     fn get(&self, object: Object) -> Result<Option<Vec<u8>>, Error> {
-        read_optional(&self.path(object))
+        let found = read_optional(&self.path(object))?;
+        if found.is_none() && object == Object::Archive {
+            return read_optional(&self.interim_path());
+        }
+        Ok(found)
     }
 
+    /// Writing the vault file replaces a stand-in `vault.interim`: it is removed once the new file
+    /// is in place. If removing fails nothing is lost, because `vault.skln` is read first.
     fn put(&self, object: Object, data: &[u8]) -> Result<(), Error> {
-        write_atomic(&self.path(object), data)
+        write_atomic(&self.path(object), data)?;
+        if object == Object::Archive {
+            let _ = remove_if_exists(&self.interim_path());
+        }
+        Ok(())
     }
 
     fn delete(&self, object: Object) -> Result<(), Error> {
-        remove_if_exists(&self.path(object))
+        self.remove(object)
     }
 }
 
@@ -205,6 +229,27 @@ mod tests {
         s.remove(Object::KeySlot).unwrap();
         s.remove(Object::KeySlot).unwrap(); // removing what isn't there is fine
         assert!(!s.has(Object::KeySlot));
+    }
+
+    #[test]
+    fn a_stand_in_vault_file_is_read_until_the_next_write_replaces_it() {
+        let s = temp_store();
+        std::fs::create_dir_all(s.dir()).unwrap();
+        std::fs::write(s.dir().join(INTERIM_FILE), b"interim").unwrap();
+        assert!(s.has(Object::Archive));
+        assert_eq!(s.get(Object::Archive).unwrap().unwrap(), b"interim");
+        // Only the vault file falls back; the key slot never does.
+        assert_eq!(s.get(Object::KeySlot).unwrap(), None);
+
+        s.put(Object::Archive, b"skln").unwrap();
+        assert_eq!(s.get(Object::Archive).unwrap().unwrap(), b"skln");
+        assert!(s.dir().join("vault.skln").is_file());
+        assert!(!s.dir().join(INTERIM_FILE).exists());
+
+        std::fs::write(s.dir().join(INTERIM_FILE), b"interim").unwrap();
+        s.remove(Object::Archive).unwrap();
+        assert!(!s.has(Object::Archive));
+        assert_eq!(s.get(Object::Archive).unwrap(), None);
     }
 
     #[test]

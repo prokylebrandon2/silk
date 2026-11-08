@@ -7,7 +7,7 @@
 //! afterwards:  fetch key slot -> unwrap VEK -> fetch vault file -> the archiver decrypts it
 //! ```
 //!
-//! The archiver is Kiln's `.skln` once that exists (see [`crate::archive`]). [`CloudVault`] holds
+//! The archiver is Kiln's `.skln` (see [`crate::archive`]). [`CloudVault`] holds
 //! the unlocked state (VEK + entries, both wiped on drop). The pure functions work on byte
 //! buffers; `unlock_remote` / `save_remote` add the cloud round trips through a [`RemoteStore`].
 use crate::archive::{self, Archiver, Member};

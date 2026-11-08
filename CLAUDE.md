@@ -43,5 +43,6 @@ the commit message, not a way to get the check to pass.
 - Cloud sync (optional, off without project values): Supabase Auth signs the user in and Supabase
   Storage keeps the two encrypted files. `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` come from the
   environment or `android/local.properties`. See `docs/ARCHITECTURE.md`, "Setting up the cloud".
-- The `.skln` container (Kiln's encryption engine) comes after Kiln's security update; `core/src/interim.rs`
-  stands in behind the `Archiver` trait until then.
+- The vault file is Kiln's `.skln` (the `kiln-skln` crate, `core/src/skln.rs`). `core/src/interim.rs` is the
+  older stand-in format, kept read-only so existing vaults convert on unlock. Encrypting the `.key` file
+  inside a `.skln` still waits for Kiln's security update.

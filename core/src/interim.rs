@@ -1,10 +1,10 @@
-//! Interim stand-in for Kiln's `.skln` archive. **This is not the `.skln` format.**
+//! The stand-in archive that came before Kiln's `.skln`, kept as a **read-only source**. This is
+//! not the `.skln` format.
 //!
-//! Kiln is a separate project and `.skln` is not in it yet. This module exists so the cloud flow
-//! (`cloud`, `keyslot`, `remote`) can be built and tested now. It is a small authenticated
-//! container with its own magic (`SKIM`, deliberately not Kiln's) and its own object name
-//! (`vault.interim`), so it can never be mistaken for a real `.skln`. Replace it by writing an
-//! `impl Archiver` over Kiln and changing `archive::Current`; nothing else needs to change.
+//! The cloud flow was built on this while `.skln` did not exist yet, so real vaults were written in it
+//! (file `vault.interim`, magic `SKIM`, deliberately not Kiln's). Silk now writes `.skln` (see
+//! [`crate::skln`]) but must keep opening these: [`crate::skln::Skln`] reads them, and
+//! `session::unlock` rewrites one as `.skln` the first time it is opened. Only the tests still write it.
 //!
 //! ```text
 //! "SKIM" | version u8 | flags u8 | revision u64 BE | nonce[12] | AES-256-GCM(archive) + tag[16]
@@ -13,7 +13,7 @@
 //!
 //! The 14-byte header is bound in as associated data. Every length is checked against what is left
 //! in the buffer, so a crafted file can't make the reader allocate or read past its input.
-use crate::archive::{Archiver, Member, Opened};
+use crate::archive::{Member, Opened};
 use crate::error::Error;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -28,6 +28,7 @@ const TAG_LEN: usize = 16;
 
 pub const MAX_MEMBERS: usize = 1024;
 pub const MAX_NAME_LEN: usize = 255;
+#[cfg(test)]
 pub const MAX_ARCHIVE_LEN: usize = 64 * 1024 * 1024;
 
 /// Member names are labels, not paths: no separators, no `.`/`..`, no control characters.
@@ -48,6 +49,7 @@ fn check_name(name: &str) -> Result<(), Error> {
 
 /// Packs members into the archive layout. The buffer is allocated once at its final size, so no
 /// stale copies are left behind by reallocation, and it is wiped on drop.
+#[cfg(test)]
 pub fn pack(members: &[Member]) -> Result<Zeroizing<Vec<u8>>, Error> {
     if members.len() > MAX_MEMBERS {
         return Err(Error::Corrupt);
@@ -136,7 +138,12 @@ pub fn unpack(bytes: &[u8]) -> Result<Vec<Member>, Error> {
     Ok(out)
 }
 
-/// Checks that `file` looks like a `.skln` without needing the key.
+/// Whether `file` starts with the stand-in's magic, which decides how it is read.
+pub fn is_interim(file: &[u8]) -> bool {
+    file.starts_with(MAGIC)
+}
+
+/// Checks that `file` looks like a stand-in vault file without needing the key.
 pub fn validate(file: &[u8]) -> Result<(), Error> {
     if file.len() < HEADER_LEN + NONCE_LEN + TAG_LEN || &file[0..4] != MAGIC || file[4] != VERSION {
         return Err(Error::NotAVault);
@@ -153,6 +160,7 @@ pub fn revision(file: &[u8]) -> Result<u64, Error> {
 }
 
 /// Archives `members` and encrypts them with the VEK under a fresh random nonce.
+#[cfg(test)]
 pub fn seal(vek: &[u8; 32], revision: u64, members: &[Member]) -> Result<Vec<u8>, Error> {
     let archive = pack(members)?;
     let mut header = [0u8; HEADER_LEN];
@@ -178,7 +186,7 @@ pub fn seal(vek: &[u8; 32], revision: u64, members: &[Member]) -> Result<Vec<u8>
     Ok(out)
 }
 
-/// Decrypts and unpacks a `.skln`. A wrong VEK, a changed header and a changed body all fail the
+/// Decrypts and unpacks a stand-in vault file. A wrong VEK, a changed header and a changed body all fail the
 /// same way (`Corrupt`): the VEK comes out of the key slot, so a bad password never reaches here.
 pub fn open(vek: &[u8; 32], file: &[u8]) -> Result<Opened, Error> {
     validate(file)?;
@@ -198,28 +206,6 @@ pub fn open(vek: &[u8; 32], file: &[u8]) -> Result<Opened, Error> {
     let plain = Zeroizing::new(plain);
     let members = unpack(&plain)?;
     Ok(Opened { revision, members })
-}
-
-/// The stand-in archiver. See the module docs.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Interim;
-
-impl Archiver for Interim {
-    fn file_name(&self) -> &'static str {
-        "vault.interim"
-    }
-
-    fn seal(&self, vek: &[u8; 32], revision: u64, members: &[Member]) -> Result<Vec<u8>, Error> {
-        seal(vek, revision, members)
-    }
-
-    fn open(&self, vek: &[u8; 32], file: &[u8]) -> Result<Opened, Error> {
-        open(vek, file)
-    }
-
-    fn revision(&self, file: &[u8]) -> Result<u64, Error> {
-        revision(file)
-    }
 }
 
 #[cfg(test)]

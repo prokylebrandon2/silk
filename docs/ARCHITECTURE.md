@@ -8,12 +8,12 @@ This is the written form of the flow diagram. Status of each piece is in the tas
 |---|---|---|
 | **Silk** | This app: the password manager, formerly called PassVault. Master-password entry, unlock/save, the unlocked state in memory. | this repository |
 | **Kiln** | A separate project: a multicore archiver (Rust engine + Android app) with its own container format. Today it writes `.kiln` v2 archives (you call them `.kln`; in Kiln's own docs `.kln` is the original Python app's format). | `kiln-rust` repository |
-| **`.skln`** | A new Kiln archive type, **not written yet**: the encrypted archive that holds Silk's entries, keyed by the VEK. | to be added to Kiln |
+| **`.skln`** | Kiln's container for encrypted data (the `kiln-skln` crate, format in Kiln's `docs/FORMAT.md`). Silk stores its entries in one, keyed by the VEK, as `vault.skln`. | Kiln: `skln/`; Silk: `core/src/skln.rs` |
 | **VEK** | Vault Encryption Key: 256 random bits, generated once at first-time setup. Encrypts the `.skln`. | in memory only; stored wrapped |
 | **Key** | The Argon2id output (the diagram's "key"; KEK in code comments). Only ever wraps the VEK. | derived on demand, never stored |
 | **Key slot** | The VEK encrypted by the key, plus the Argon2id settings and salt needed to re-derive it. 91 bytes. | `core/src/keyslot.rs` |
 | **`Archiver`** | The seam between Silk and Kiln: a small trait for "seal entries with the VEK / open them again". | `core/src/archive.rs` |
-| **Interim archiver** | A stand-in implementation of `Archiver` so the cloud flow can be built and tested before `.skln` exists. **Not the `.skln` format**: different magic (`SKIM`) and object name (`vault.interim`). | `core/src/interim.rs` |
+| **Interim archive** | The stand-in that was used before `.skln` existed. **Not the `.skln` format**: different magic (`SKIM`) and object name (`vault.interim`). Read-only now: such a file still opens and is rewritten as `.skln` on unlock. | `core/src/interim.rs` |
 | **Local store** | The on-device copy of the key slot and vault file in the app's private folder. It implements `RemoteStore`, so unlocking from the local copy runs the same flow as unlocking from the cloud does. Also holds the rollback mark. | `core/src/local.rs` |
 | **Session** | The unlocked state the app holds (VEK + entries), idle lock, saves to the local store, backup and restore. | `core/src/session.rs` |
 | **Backup** | One `.silk` file: key slot + vault file. | `core/src/backup.rs` |
@@ -62,26 +62,31 @@ I read the Kiln repository to see what exists. Kiln's public API (`pack`, `Archi
 6. **Cipher choice is open.** Kiln uses ChaCha20-Poly1305, Silk's key slot uses AES-256-GCM. Either works for a random VEK; using one for both keeps the Android library smaller.
 7. **The browser extension reads the vault in JavaScript today.** If it should open `.skln`, the format needs a JS reader too (Kiln has none), so a simple, well-specified container is worth it.
 
-Once `.skln` exists: write `impl Archiver for <Kiln adapter>` and change `archive::Current`. Nothing in `cloud.rs`, `keyslot.rs` or `remote.rs` should need to change. Keep `interim.rs` as a read-only source: devices will by then hold real vaults in the interim format (see Known limits), and they need converting to `.skln` on unlock.
+**Status: built.** Kiln has a separate crate, `kiln-skln` (`skln/` in the Kiln repository, edition 2021, depending on `chacha20poly1305`, `hkdf`, `sha2`, `getrandom` and `zeroize`), with the raw-key seal and open, the authenticated revision in the plain header and the member bundle Silk keeps its entries in. Points 1 to 4 and 7 are met by it and by `browser-extension/src/skln.js`. Point 5 did not arise: the crate is edition 2021 and Silk's CI uses the stable toolchain. Point 6: the vault file is ChaCha20-Poly1305 and the key slot stays AES-256-GCM. `core/src/skln.rs` is the `Archiver` for it and `archive::Current` points at it; nothing in `cloud.rs`, `keyslot.rs` or `remote.rs` changed. `interim.rs` stays as a read-only source: a device that holds a vault in the interim format opens it and rewrites it as `.skln` on the first unlock (see Known limits).
 
 ## Formats
 
-All integers are big-endian.
+All integers are big-endian, except inside a `.skln`, which is little-endian like the rest of Kiln's formats.
 
 ```
 key slot  "SKVK" | version u8 | flags u8 (bit0 = key file) | t u32 | memKiB u32 | p u8 | salt[16] | nonce[12] | AES-256-GCM(VEK) + tag[16]
           first 31 bytes are the associated data; total 91 bytes
 
-interim   "SKIM" | version u8 | flags u8 | revision u64 | nonce[12] | AES-256-GCM(archive) + tag[16]       (stand-in, see above)
-archive   count u32 | { name_len u16 | name | data_len u32 | data }*
-          one member today: "vault.json" = {"entries":[...]}  (same entry shape as the old vault)
+skln      "\x89SKLN\r\n\x1a" | version u8 (1) | flags u8 | kind u8 (1 = bundle) | chunk_log2 u8 | revision u64 | salt[16]   (36 bytes)
+          then records: len u32 | ChaCha20-Poly1305(chunk) + tag[16]. The file key is HKDF-SHA256(VEK, salt); the header is
+          authenticated, so the revision cannot be changed unnoticed. Full layout: Kiln's docs/FORMAT.md
+bundle    (the payload of a .skln, little-endian) count u32 | { name_len u16 | name | data_len u32 | data }*
+          one member: "vault.json" = {"entries":[...]}  (same entry shape as the old vault)
+
+interim   "SKIM" | version u8 | flags u8 | revision u64 | nonce[12] | AES-256-GCM(archive) + tag[16]       (read-only, see above)
+archive   (inside a SKIM file, big-endian) count u32 | { name_len u16 | name | data_len u32 | data }*
 
 backup    "SKBK" | version u8 | key slot[91] | vault file (the rest)
 
 key file  "SKEY" | version u8 | secret[64] | login_len u32 | login JSON      (login part optional; see "The key file")
 ```
 
-The browser extension reads the backup (`browser-extension/src/vault.js`) and, as before, old `.pvlt` files. Its vault-file part follows the interim format, so it changes together with `interim.rs`.
+The browser extension reads the backup (`browser-extension/src/vault.js`) and, as before, old `.pvlt` files. It opens both kinds of vault file inside a backup: `.skln` (`src/skln.js`; `src/chacha.js` carries its own ChaCha20-Poly1305 because WebCrypto has none) and the interim `SKIM` kind of older backups.
 
 Key derivation is unchanged from the old vault: `SHA-256(password)`, mixed with `SHA-256(key file material)` when a key file is used, then Argon2id (t=3, 64 MiB, p=4 by default) to 32 bytes. The material of a Silk key file is its 64-byte secret; the material of any other file is the whole file. Existing key files keep working.
 
@@ -104,7 +109,8 @@ In the app's private folder (`core/src/local.rs`):
 
 ```
 keyslot.skvk     the key slot
-vault.interim    the vault file (vault.skln later)
+vault.skln       the vault file (Kiln's .skln)
+vault.interim    a vault file from before .skln: read when there is no vault.skln, removed when the next save writes one
 vault.pvlt       an old vault, only until the first unlock converts it
 seen.rev         highest vault revision this device has seen
 ```
@@ -121,7 +127,7 @@ Supabase signs the user in (Auth) and keeps the files (Storage). One private buc
 
 ```
 silk-vaults/vaults/<user id>/keyslot.skvk
-silk-vaults/vaults/<user id>/vault.skln        (vault.interim while the stand-in is in use)
+silk-vaults/vaults/<user id>/vault.skln
 ```
 
 ```
@@ -163,7 +169,7 @@ An earlier version signed users in with Firebase and sent the Firebase token to 
 - **Upload order** is key slot first, then vault file, so a half-finished first-time setup leaves a slot without a vault file (accepted as an empty vault), never a vault file nobody can open.
 - **Cloud sync is optional.** Without the Supabase values (`android/local.properties`) the app stays fully offline (it still declares `INTERNET`, but `Net.java` only accepts HTTPS to the one configured Supabase host, and nothing else).
 - **The sign-in in the key file is not encrypted yet** (see "The key file").
-- **Real vaults are now written in the interim format** (`vault.interim`, magic `SKIM`). When `.skln` arrives, `interim.rs` cannot simply be deleted: it has to stay as a read-only source so existing vaults can be converted to `.skln` on unlock (the two have different file names, so telling them apart is easy). The same goes for the backup bundle, which embeds whichever vault file is current.
+- **Vaults written before `.skln` are converted on unlock.** A device that holds `vault.interim` (magic `SKIM`) opens it through `interim.rs`, which is now read-only, and the first unlock saves it again as `vault.skln` with the next revision, so the rollback mark stays valid, then removes `vault.interim`. A backup that embeds an interim vault file still restores and still opens in the extension. The cloud only accepts `vault.skln` now (the Storage policies no longer list `vault.interim`), so an interim copy left in a bucket is not read; sync has not been run against the live project yet (task 17).
 
 ## The PassVault to Silk rename
 
@@ -185,14 +191,14 @@ Left on purpose:
 | 3 | Key slot: Argon2id key wraps the VEK (`keyslot.rs`) | done |
 | 4 | `CloudVault` flow: setup, unlock, save, change password, legacy `.pvlt` migration, VEK export for biometrics, `RemoteStore` trait (`cloud.rs`, `remote.rs`) | done |
 | 5 | Cloud layout and access policies (`supabase/storage-policies.sql`) | done on paper; policies not yet run against the live project |
-| 6 | **Kiln repo (yours):** add `.skln` with the contract above | todo |
-| 7 | Add a Kiln-backed `Archiver`, switch `archive::Current`, convert interim vaults to `.skln` on unlock (keep `interim.rs` as the reader); move Silk's CI toolchain if needed | todo, after 6 |
+| 6 | **Kiln repo (yours):** add `.skln` with the contract above | done: the `kiln-skln` crate (raw-key seal/open, member bundle, golden files written by an independent Python implementation) |
+| 7 | Add a Kiln-backed `Archiver`, switch `archive::Current`, convert interim vaults to `.skln` on unlock (keep `interim.rs` as the reader) | done (`skln.rs`, `session.rs`, `local.rs`); not compiled by the author: run `cargo test -p silk-core` |
 | 8 | Session uses `CloudVault`: local copy of key slot + vault file in private storage (offline unlock), migrate `vault.pvlt` on first unlock (`local.rs`, `session.rs`, `backup.rs`) | done, untested on a device |
 | 9 | Cloud transport: Supabase Auth (`auth.rs`) and Supabase Storage (`supabase.rs`, a `RemoteStore`) over an `Http` trait, carried by the Java glue (`Net.java`); `INTERNET` permission; project config (`local.properties`) | done with mocked tests; **not yet run against the live project** (do task 17), untested on a device |
 | 10 | Biometric unlock wraps the VEK (`export_vek` / `unlock_with_vek`) instead of the old vault key | done (stale keys are detected and reset) |
 | 11 | Sync safety: rollback detection from the revision, conflict handling (`sync.rs`: unrelated vaults and same-revision saves are never overwritten silently), VEK rotation with an atomic commit | partly: rollback guard and conflict handling done; rotation todo |
 | 12 | UI: first-time setup vs unlock, sync status, change password, migration prompt | partly: setup/unlock, a migration notice and the Cloud sync screens (sign in, sync status, Sync now, keep-or-use choice) exist; change password todo |
-| 13 | Browser extension reads key slot + vault file | done for the interim format and old `.pvlt`; `.skln` reader todo, after 6 |
+| 13 | Browser extension reads key slot + vault file | done: `.skln`, the interim format and old `.pvlt` (`node --test` in `browser-extension/`) |
 | 14 | The deeper PassVault to Silk rename (package, crates, library) | done, see above |
 | 15 | Silk key file (`SKEY`) and automatic saving of the cloud sign-in in it (`keyfile.rs`, `ui.rs`, `SilkActivity.saveKeyFile`) | done, untested on a device |
 | 16 | **Kiln repo (yours):** security update and encryption engine, then encrypt the `.key` file inside a `.skln` | todo, after the Kiln security update; Silk's side is a later update |

@@ -1,6 +1,6 @@
 //! Silk core: vault file format, key derivation, TOTP and autofill matching.
 //! Cloud architecture: `cloud` (unlock/save flow) -> `keyslot` (Argon2id key wraps the VEK) -> `archive`
-//! (Kiln's `.skln`; `interim` stands in until it exists). `local` keeps the on-device copy of both
+//! (Kiln's `.skln`, through `skln`; `interim` is the older stand-in format, read-only). `local` keeps the on-device copy of both
 //! objects, `session` is the unlocked state the app holds, `backup` is the one-file backup.
 //! Cloud: `auth` speaks Supabase Auth (who the user is) and `supabase` speaks Supabase Storage (the two
 //! encrypted files, as a `RemoteStore`), both over a platform-provided `Http` trait; `sync` moves the two
@@ -24,6 +24,7 @@ pub mod otp;
 pub mod remote;
 pub mod session;
 pub mod settings;
+pub mod skln;
 pub mod supabase;
 pub mod sync;
 pub mod transfer;

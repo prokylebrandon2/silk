@@ -6,10 +6,12 @@
 //! local copy (`local::DirStore`: key slot + vault file in the app's private folder).
 //!
 //! Vaults from before the key slot existed (`vault.pvlt`) are converted the first time they are
-//! unlocked with the password: new VEK, new key slot, same entries.
+//! unlocked with the password: new VEK, new key slot, same entries. A vault file of the stand-in
+//! format (`vault.interim`) is rewritten as `.skln` the first time it is opened.
 use crate::backup;
 use crate::cloud::{CloudVault, Flow};
 use crate::error::Error;
+use crate::interim;
 use crate::local::DirStore;
 use crate::remote::{Object, RemoteStore};
 use crate::vault::{Entry, Kdf, Vault};
@@ -55,23 +57,35 @@ pub fn unlock(
             });
         }
     }
-    let (vault, flow) = CloudVault::unlock_remote(store, password, key_file, kdf)?;
+    let (mut vault, flow) = CloudVault::unlock_remote(store, password, key_file, kdf)?;
     let outcome = match flow {
         Flow::FirstTimeSetup => Outcome::Created,
         Flow::Subsequent => {
             store.check_revision(vault.revision())?;
+            upgrade(store, &mut vault)?;
             Outcome::Unlocked
         }
     };
     Ok(Unlocked { vault, outcome })
 }
 
+/// A vault file of the stand-in format is saved again as `.skln` (revision + 1, so the rollback mark
+/// still holds). The save writes `vault.skln` and then removes `vault.interim`. Nothing happens for
+/// a vault that is already `.skln`.
+fn upgrade(store: &DirStore, vault: &mut CloudVault) -> Result<(), Error> {
+    match store.get(Object::Archive)? {
+        Some(file) if interim::is_interim(&file) => vault.save_remote(store),
+        _ => Ok(()),
+    }
+}
+
 /// Biometric quick unlock: the VEK comes from the Keystore, so there is no Argon2id.
 pub fn unlock_with_vek(store: &DirStore, vek: &[u8; 32]) -> Result<CloudVault, Error> {
     let slot = store.get(Object::KeySlot)?.ok_or(Error::NotAVault)?;
     let file = store.get(Object::Archive)?;
-    let vault = CloudVault::unlock_with_vek(&slot, file.as_deref(), vek)?;
+    let mut vault = CloudVault::unlock_with_vek(&slot, file.as_deref(), vek)?;
     store.check_revision(vault.revision())?;
+    upgrade(store, &mut vault)?;
     Ok(vault)
 }
 
@@ -265,6 +279,7 @@ fn same_login(a: &Entry, b: &Entry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::archive::Archiver;
     use crate::vault::new_id;
 
     const FAST: Kdf = Kdf {
@@ -443,6 +458,54 @@ mod tests {
         s.import(&backup_at_1).unwrap();
         assert_eq!(open_with(&mut s, "password1"), Outcome::Unlocked);
         assert!(s.entries().unwrap().is_empty());
+    }
+
+    /// Rewrites the vault file on disk as a stand-in `vault.interim`, the way an older build left it.
+    fn downgrade_to_interim(s: &mut Session) {
+        let store = s.store().unwrap();
+        let vek = s.export_vek().unwrap();
+        let file = store.get(Object::Archive).unwrap().unwrap();
+        let opened = crate::archive::current().open(&vek, &file).unwrap();
+        let old = interim::seal(&vek, opened.revision, &opened.members).unwrap();
+        store.remove(Object::Archive).unwrap();
+        std::fs::write(store.dir().join("vault.interim"), old).unwrap();
+        s.lock();
+    }
+
+    #[test]
+    fn a_stand_in_vault_file_is_rewritten_as_skln_on_unlock() {
+        let mut s = temp_session();
+        open_with(&mut s, "password1");
+        s.upsert(entry("1")).unwrap();
+        let before = s.store().unwrap().seen_revision();
+        downgrade_to_interim(&mut s);
+
+        let store = s.store().unwrap();
+        assert!(store.dir().join("vault.interim").is_file());
+        assert!(!store.dir().join("vault.skln").exists());
+        assert_eq!(open_with(&mut s, "password1"), Outcome::Unlocked);
+        assert_eq!(s.entries().unwrap()[0].id, "1");
+        assert!(!store.dir().join("vault.interim").exists());
+        let file = store.get(Object::Archive).unwrap().unwrap();
+        assert!(!interim::is_interim(&file));
+        // One revision up, so the rollback mark still agrees with the file.
+        assert_eq!(crate::archive::current().revision(&file).unwrap(), before + 1);
+        assert_eq!(store.seen_revision(), before + 1);
+    }
+
+    #[test]
+    fn a_stand_in_vault_file_is_rewritten_as_skln_on_biometric_unlock() {
+        let mut s = temp_session();
+        open_with(&mut s, "password1");
+        s.upsert(entry("1")).unwrap();
+        let vek = s.export_vek().unwrap();
+        downgrade_to_interim(&mut s);
+
+        let store = s.store().unwrap();
+        let vault = unlock_with_vek(&store, &vek).unwrap();
+        assert_eq!(vault.entries.len(), 1);
+        assert!(!store.dir().join("vault.interim").exists());
+        assert!(store.dir().join("vault.skln").is_file());
     }
 
     #[test]

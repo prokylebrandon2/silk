@@ -82,6 +82,56 @@ test('rejects a tampered or truncated Silk backup', async () => {
   assert.throws(() => parseHeader(absurd), { code: 'corrupt' });
 });
 
+test('still opens a Silk backup whose vault file is the stand-in "SKIM" kind', async () => {
+  const kf = new Uint8Array(64).fill(7);
+  const old = await sealBundle([entry], 'correct horse', kf, undefined, 5, 'interim');
+  assert.equal(parseHeader(old).kind, 'silk');
+  assert.equal(old[5 + 91], 0x53); // "SKIM", not the .skln magic
+  const back = await openVault(old, 'correct horse', kf);
+  assert.equal(back[0].title, 'GitHub');
+  await assert.rejects(openVault(old, 'wrong', kf), { code: 'wrong-credentials' });
+});
+
+test('opens a .skln vault that spans many records', async () => {
+  const many = Array.from({ length: 200 }, (_, i) => ({ ...entry, id: String(i), title: `Site ${i}`, notes: 'n'.repeat(150) }));
+  const b = await sealBundle(many, 'password1', null, undefined, 9, 'skln', 12);
+  const vault = b.subarray(5 + 91);
+  assert.ok(vault.length > 5 * 4096, 'more than a few 4 KiB records');
+  const back = await openVault(b, 'password1', null);
+  assert.equal(back.length, 200);
+  assert.equal(back[199].title, 'Site 199');
+  assert.equal(back[0].notes.length, 150);
+});
+
+test('rejects a damaged .skln vault file', async () => {
+  const many = Array.from({ length: 100 }, (_, i) => ({ ...entry, id: String(i), notes: 'n'.repeat(150) }));
+  const b = await sealBundle(many, 'password1', null, undefined, 3, 'skln', 12);
+  const at = 5 + 91; // where the .skln starts
+  const record = 4 + 4096 + 16; // a full record with chunk_log2 = 12
+  const flip = (offset) => {
+    const c = b.slice();
+    c[offset] ^= 1;
+    return c;
+  };
+  const damaged = { code: 'corrupt' };
+  await assert.rejects(openVault(flip(at + 9), 'password1', null), damaged); // flags
+  await assert.rejects(openVault(flip(at + 11), 'password1', null), damaged); // chunk_log2
+  await assert.rejects(openVault(flip(at + 13), 'password1', null), damaged); // revision
+  await assert.rejects(openVault(flip(at + 20), 'password1', null), damaged); // salt
+  await assert.rejects(openVault(flip(at + 36), 'password1', null), damaged); // a record length
+  await assert.rejects(openVault(flip(at + 36 + 4 + 7), 'password1', null), damaged); // ciphertext
+  await assert.rejects(openVault(flip(b.length - 1), 'password1', null), damaged); // last tag
+  await assert.rejects(openVault(b.slice(0, b.length - 1), 'password1', null), damaged); // cut short
+  await assert.rejects(openVault(b.slice(0, at + 36 + record), 'password1', null), damaged); // cut at a record boundary
+  await assert.rejects(openVault(b.slice(0, at + 36 + 10), 'password1', null), damaged); // cut inside the first record
+  await assert.rejects(openVault(Uint8Array.from([...b, 0]), 'password1', null), damaged); // appended byte
+  const swapped = b.slice();
+  swapped.set(b.subarray(at + 36, at + 36 + record), at + 36 + record);
+  swapped.set(b.subarray(at + 36 + record, at + 36 + 2 * record), at + 36);
+  await assert.rejects(openVault(swapped, 'password1', null), damaged); // two records swapped
+  assert.equal((await openVault(b, 'password1', null)).length, 100); // the original is fine
+});
+
 // RFC 6238 appendix B vectors (8 digits). The seeds are the ASCII strings "1234567890" repeated to 20, 32 and 64 bytes.
 const b32 = (str) => {
   const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';

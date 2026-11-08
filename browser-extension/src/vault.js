@@ -2,14 +2,16 @@
 //
 // 1. A Silk backup (core/src/backup.rs, the current kind): "SKBK" | version | key slot[91] | vault file.
 //    The key slot (core/src/keyslot.rs) is the random VEK encrypted with the Argon2id key; the vault
-//    file (core/src/interim.rs, a stand-in until Kiln's .skln exists) is the entries encrypted with
-//    the VEK. So: Argon2id key -> unwrap VEK -> decrypt the vault file -> read the archive.
+//    file is the entries encrypted with the VEK. So: Argon2id key -> unwrap VEK -> decrypt the vault
+//    file -> read the archive. The vault file is one of two kinds:
 //      key slot   "SKVK" | version | flags | t u32 | memKiB u32 | p u8 | salt[16] | nonce[12] | AES-GCM(VEK) + tag
 //                 (the first 31 bytes are the associated data)
-//      vault file "SKIM" | version | flags | revision u64 | nonce[12] | AES-GCM(archive) + tag
+//      .skln      Kiln's container (src/skln.js, core/src/skln.rs): the kind the app writes now.
+//      "SKIM"     the stand-in that came before (core/src/interim.rs), read so older backups still open:
+//                 "SKIM" | version | flags | revision u64 | nonce[12] | AES-GCM(archive) + tag
 //                 (the first 14 bytes are the associated data)
 //      archive    count u32 | { name_len u16 | name | data_len u32 | data }*, entries in "vault.json"
-//    When .skln replaces the stand-in, only the vault-file part of this changes.
+//                 (big-endian in "SKIM", little-endian in .skln)
 //
 // 2. An old vault file (core/src/vault.rs, kept so old backups still open): "PVLT" | version | flags |
 //    t | memKiB | p | salt[16], then nonce[12] and AES-256-GCM(ciphertext + tag). Here the Argon2id
@@ -17,6 +19,7 @@
 //
 // In both, the key is Argon2id( SHA-256(password) [then SHA-256(that || SHA-256(key file))] ) with the salt.
 import { argon2, TYPES } from './argon2.js';
+import { isSkln, openSkln, unpackBundle, KIND_BUNDLE } from './skln.js';
 
 const HEADER_LEN = 31;
 const NONCE_LEN = 12;
@@ -69,7 +72,8 @@ export function parseBundle(f) {
   }
   const slot = f.subarray(BUNDLE_HEADER, BUNDLE_HEADER + SLOT_LEN);
   const vault = f.subarray(BUNDLE_HEADER + SLOT_LEN);
-  if (!hasMagic(slot, MAGIC_SLOT) || slot[4] !== 1 || !hasMagic(vault, MAGIC_VAULT) || vault[4] !== 1) {
+  const vaultOk = isSkln(vault) ? vault[8] === 1 : hasMagic(vault, MAGIC_VAULT) && vault[4] === 1;
+  if (!hasMagic(slot, MAGIC_SLOT) || slot[4] !== 1 || !vaultOk) {
     throw new VaultError('not-a-vault', "This isn't a Silk file.");
   }
   const dv = new DataView(slot.buffer, slot.byteOffset, slot.byteLength);
@@ -174,14 +178,23 @@ async function openBundle(file, password, keyFile, onProgress) {
   if (vek.length !== 32) throw damaged();
   // The vault file: with the right VEK this only fails if the file was changed.
   let plain;
+  let members;
   try {
-    plain = await decryptGcm(vek, vault.subarray(VAULT_AAD, VAULT_AAD + NONCE_LEN), vault.subarray(0, VAULT_AAD), vault.subarray(VAULT_AAD + NONCE_LEN));
-  } catch {
-    throw damaged();
+    if (isSkln(vault)) {
+      const opened = await openSkln(vek, vault);
+      plain = opened.plaintext;
+      if (opened.kind !== KIND_BUNDLE) throw damaged();
+      members = unpackBundle(plain);
+    } else {
+      plain = await decryptGcm(vek, vault.subarray(VAULT_AAD, VAULT_AAD + NONCE_LEN), vault.subarray(0, VAULT_AAD), vault.subarray(VAULT_AAD + NONCE_LEN));
+      members = unpack(plain);
+    }
+  } catch (e) {
+    throw e instanceof VaultError ? e : damaged();
   } finally {
     vek.fill(0);
   }
-  const member = unpack(plain).get('vault.json');
+  const member = members.get('vault.json');
   if (!member) throw damaged();
   const doc = parseDoc(member);
   plain.fill(0);

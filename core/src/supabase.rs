@@ -1082,7 +1082,7 @@ mod tests {
             assert_eq!(uploads[0].body, a.get(Object::KeySlot).unwrap().unwrap());
             assert_eq!(uploads[1].body, a.get(Object::Archive).unwrap().unwrap());
             assert!(uploads[0].body.starts_with(b"SKVK"));
-            assert!(uploads[1].body.starts_with(b"SKIM"));
+            assert!(uploads[1].body.starts_with(b"\x89SKLN"));
             // No plaintext anywhere in anything that was sent: bodies, URLs or headers.
             for req in world.seen.borrow().iter() {
                 let mut all = req.body.clone();
