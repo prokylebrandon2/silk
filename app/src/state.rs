@@ -1,7 +1,7 @@
 //! Process-wide state shared by the UI thread and the JNI entry points (autofill runs on Java threads).
 use silk_core::auth::Auth;
-use silk_core::supabase;
 use silk_core::session::{Outcome, Session};
+use silk_core::supabase;
 use silk_core::{autofill, sync, Error};
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};

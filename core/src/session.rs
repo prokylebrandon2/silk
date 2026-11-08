@@ -489,7 +489,10 @@ mod tests {
         let file = store.get(Object::Archive).unwrap().unwrap();
         assert!(!interim::is_interim(&file));
         // One revision up, so the rollback mark still agrees with the file.
-        assert_eq!(crate::archive::current().revision(&file).unwrap(), before + 1);
+        assert_eq!(
+            crate::archive::current().revision(&file).unwrap(),
+            before + 1
+        );
         assert_eq!(store.seen_revision(), before + 1);
     }
 

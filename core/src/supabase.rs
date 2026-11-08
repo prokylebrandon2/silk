@@ -20,8 +20,8 @@
 //! any key ever reaches this module; it is handed the two finished byte buffers and nothing else.
 //!
 //! The access token and the Supabase key are never written into an [`Error`].
-use crate::error::Error;
 use crate::auth::{Account, Auth, Http, HttpRequest, HttpResponse};
+use crate::error::Error;
 use crate::remote::{Object, RemoteStore};
 use serde::Deserialize;
 use serde_json::Value;
@@ -267,11 +267,7 @@ pub struct SupabaseStore<'a> {
 
 impl<'a> SupabaseStore<'a> {
     /// Fails with `Error::Corrupt` when the uid isn't what Supabase hands out (it becomes part of the path).
-    pub fn new(
-        http: &'a dyn Http,
-        cfg: Config,
-        auth: Auth,
-    ) -> Result<SupabaseStore<'a>, Error> {
+    pub fn new(http: &'a dyn Http, cfg: Config, auth: Auth) -> Result<SupabaseStore<'a>, Error> {
         Ok(SupabaseStore {
             http,
             account: Account::new(http, cfg.clone(), auth)?,
@@ -648,10 +644,7 @@ mod tests {
         for bad in ["../other", "a/b", "", "a b", "x?y=1"] {
             let mut a = auth_with(&token("a"), unix_now() + 3600);
             a.uid = bad.into();
-            assert!(
-                SupabaseStore::new(&http, cfg(), a).is_err(),
-                "{bad}"
-            );
+            assert!(SupabaseStore::new(&http, cfg(), a).is_err(), "{bad}");
         }
         // A token that belongs to somebody else is refused before anything is sent.
         let other = jwt(serde_json::json!({ "sub": "someone-else", "role": "authenticated" }));

@@ -96,8 +96,7 @@ enum Op {
 /// Signs in an existing account.
 pub fn sign_in(http: &dyn Http, cfg: &Config, email: &str, password: &str) -> Result<Auth, Error> {
     let reply = password_call(http, cfg, Op::SignIn, email, password)?;
-    session(&reply, email.trim())?
-        .ok_or_else(|| Error::Remote("unexpected sign-in answer".into()))
+    session(&reply, email.trim())?.ok_or_else(|| Error::Remote("unexpected sign-in answer".into()))
 }
 
 /// Creates an account and signs in to it. When the Supabase project asks new accounts to confirm
@@ -183,7 +182,9 @@ fn session(body: &[u8], fallback_email: &str) -> Result<Option<Auth>, Error> {
     let Some(access_token) = text(&v, "access_token").filter(|t| !t.is_empty()) else {
         return Ok(None);
     };
-    let refresh_token = text(&v, "refresh_token").filter(|t| !t.is_empty()).ok_or_else(bad)?;
+    let refresh_token = text(&v, "refresh_token")
+        .filter(|t| !t.is_empty())
+        .ok_or_else(bad)?;
     let user = v.get("user").ok_or_else(bad)?;
     let uid = text(user, "id").ok_or_else(bad)?;
     let email = text(user, "email")
@@ -224,7 +225,9 @@ fn api_error(op: Op, status: u16, body: &[u8]) -> Error {
     let wrong = || account("Wrong email or password.");
     let too_many = || account("Too many attempts. Wait a few minutes and try again.");
     let unconfirmed = || {
-        account("Confirm your email first: open the link Supabase sent to that address, then sign in.")
+        account(
+            "Confirm your email first: open the link Supabase sent to that address, then sign in.",
+        )
     };
     let exists = || account("That email already has an account. Use Sign in instead.");
 
@@ -262,7 +265,11 @@ fn api_error(op: Op, status: u16, body: &[u8]) -> Error {
         return too_many();
     }
     if legacy == "invalid_grant" {
-        return if op == Op::Refresh { Error::SignedOut } else { wrong() };
+        return if op == Op::Refresh {
+            Error::SignedOut
+        } else {
+            wrong()
+        };
     }
     if lower.contains("invalid login credentials") {
         return wrong();
@@ -439,7 +446,10 @@ mod tests {
         let seen = http.seen.borrow();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].method, "POST");
-        assert_eq!(seen[0].url, format!("{URL}/auth/v1/token?grant_type=password"));
+        assert_eq!(
+            seen[0].url,
+            format!("{URL}/auth/v1/token?grant_type=password")
+        );
         assert_eq!(header(&seen[0], "apikey"), Some("sb_publishable_testkey"));
         assert!(String::from_utf8_lossy(&seen[0].body).contains("\"email\":\"me@example.com\""));
         assert_eq!(a.login().refresh_token, "ref");
@@ -476,9 +486,8 @@ mod tests {
             (r#""expires_in":"7200","#, 7000),
             ("", 3000),
         ] {
-            let json = format!(
-                r#"{{"access_token":"t",{body}"refresh_token":"r","user":{{"id":"u1"}}}}"#
-            );
+            let json =
+                format!(r#"{{"access_token":"t",{body}"refresh_token":"r","user":{{"id":"u1"}}}}"#);
             let http = Script::new(vec![(200, json.as_str())]);
             let a = sign_in(&http, &cfg(), "me@example.com", "x").unwrap();
             assert!(a.expires_at > unix_now() + min, "{json}");

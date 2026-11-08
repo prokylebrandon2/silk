@@ -4,11 +4,11 @@
 use crate::bridge;
 use crate::state::{self, AuthHow, Event};
 use crate::{MainWindow, OtpRow, Row, Theme};
-use silk_core::{auth, supabase};
 use silk_core::keyfile::{KeyFile, Login};
 use silk_core::otp::{self, OtpParams};
 use silk_core::session::{self, Outcome};
 use silk_core::sync;
+use silk_core::{auth, supabase};
 use silk_core::{generate, new_id, transfer, Entry, Error, GenOptions, Kdf, Settings};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::cell::RefCell;
