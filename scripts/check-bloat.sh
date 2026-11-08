@@ -104,7 +104,11 @@ for c in $FORBIDDEN_CRATES; do
 done
 
 if command -v cargo >/dev/null 2>&1; then
-  n=$(cargo tree -p silk-core -e normal --prefix none 2>/dev/null | sort -u | wc -l)
+  n=$(cargo tree -p silk-core -e normal --prefix none 2>/dev/null |
+    sed 's/ (\*)$//' |
+    sort -u |
+    grep -v '^silk-core v' |
+    wc -l)
   if [ "$n" -eq 0 ]; then
     echo "note: could not run cargo tree, skipping the core crate count"
   elif [ "$n" -gt "$MAX_CORE_CRATES" ]; then
