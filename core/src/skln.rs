@@ -4,13 +4,8 @@
 //! ChaCha20-Poly1305 records under a key derived from the VEK and a fresh salt, with the revision in
 //! the plain header (authenticated, readable without the key). This file only connects it to the
 //! trait and turns its errors into Silk's.
-//!
-//! Vault files of the stand-in format (`SKIM`, see [`crate::interim`]) are still opened, so a device
-//! that holds one keeps working; the next save writes `.skln`. Revisions carry on across the two
-//! formats, so the rollback mark stays valid.
 use crate::archive::{Archiver, Member, Opened};
 use crate::error::Error;
-use crate::interim;
 use kiln_skln::bundle;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -36,9 +31,6 @@ impl Archiver for Skln {
     }
 
     fn open(&self, vek: &[u8; 32], file: &[u8]) -> Result<Opened, Error> {
-        if interim::is_interim(file) {
-            return interim::open(vek, file);
-        }
         let opened = bundle::open_bundle(vek, file).map_err(convert)?;
         Ok(Opened {
             revision: opened.revision,
@@ -47,9 +39,6 @@ impl Archiver for Skln {
     }
 
     fn revision(&self, file: &[u8]) -> Result<u64, Error> {
-        if interim::is_interim(file) {
-            return interim::revision(file);
-        }
         kiln_skln::revision(file).map_err(convert)
     }
 }
@@ -114,20 +103,5 @@ mod tests {
     fn a_skln_that_is_not_a_bundle_is_refused() {
         let f = kiln_skln::seal(&KEY, kiln_skln::Kind::Archive, 1, b"x").unwrap();
         assert_eq!(Skln.open(&KEY, &f).err(), Some(Error::NotAVault));
-    }
-
-    #[test]
-    fn stand_in_files_still_open_and_the_next_seal_is_skln() {
-        let old = interim::seal(&KEY, 4, &sample()).unwrap();
-        assert!(!old.starts_with(&kiln_skln::MAGIC));
-        assert_eq!(Skln.revision(&old).unwrap(), 4);
-        let back = Skln.open(&KEY, &old).unwrap();
-        assert_eq!(back.revision, 4);
-        assert_eq!(back.members, sample());
-        assert_eq!(Skln.open(&[1u8; 32], &old).err(), Some(Error::Corrupt));
-
-        let next = Skln.seal(&KEY, back.revision + 1, &back.members).unwrap();
-        assert!(next.starts_with(&kiln_skln::MAGIC));
-        assert_eq!(Skln.revision(&next).unwrap(), 5);
     }
 }

@@ -5,7 +5,7 @@ use crate::state::{self, AuthHow, Event};
 use crate::{MainWindow, OtpRow, Row, Theme};
 use silk_core::keyfile::{KeyFile, Login};
 use silk_core::otp::{self, OtpParams};
-use silk_core::session::{self, Outcome};
+use silk_core::session;
 use silk_core::sync;
 use silk_core::{auth, supabase};
 use silk_core::{generate, new_id, transfer, Entry, Error, GenOptions, Kdf, Settings};
@@ -851,13 +851,12 @@ fn handle_synced(
     update_cloud_ui(ui, c);
 }
 
-/// Creates the vault on first use, converts an old `.pvlt` one, or opens the existing one. The slow
+/// Creates the vault on first use or opens the existing one. The slow
 /// Argon2id work runs here, outside the session lock, so autofill is never held up behind it.
-fn unlock_or_create(pw: &str, key_file: Option<&[u8]>) -> Result<Outcome, Error> {
+fn unlock_or_create(pw: &str, key_file: Option<&[u8]>) -> Result<(), Error> {
     let store = state::session().store()?;
-    let opened = session::unlock(&store, pw, key_file, Kdf::default())?;
-    state::session().install(opened.vault)?;
-    Ok(opened.outcome)
+    let vault = session::unlock(&store, pw, key_file, Kdf::default())?;
+    state::session().install(vault)
 }
 
 /// Biometric unlock: the Keystore hands back the VEK, so there is no Argon2id.
@@ -915,29 +914,18 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
     match ev {
         Event::CloudAuth { how, result } => handle_cloud_auth(ui, c, how, result),
         Event::Synced { mode, result } => handle_synced(ui, c, mode, result),
-        Event::Unlocked(Ok(outcome)) => {
+        Event::Unlocked(Ok(())) => {
             ui.set_busy(false);
             ui.set_pw1("".into());
             ui.set_pw2("".into());
             ui.set_error("".into());
             c.creating = false;
             ui.set_creating(false);
-            let migrated = outcome == Outcome::Migrated;
-            if migrated {
-                // The biometric key wrapped the old vault key (before the VEK existed), which the converted vault no longer uses.
-                bridge::bio_disable();
-                c.bio_enrolled = false;
-                ui.set_bio_enrolled(false);
-            }
             if c.auth_mode {
                 // Started by autofill: hand the matching logins back to the app that asked.
                 bridge::finish_with_fill();
             } else {
-                ui.set_notice(if migrated {
-                    "Your vault was upgraded to Silk's new format. If you used biometric unlock, turn it on again in More.".into()
-                } else {
-                    "".into()
-                });
+                ui.set_notice("".into());
                 ui.set_query("".into());
                 refresh_rows(ui, "");
                 ui.set_screen(1);
@@ -972,7 +960,7 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
                         state::touch();
                         std::thread::spawn(move || {
                             let result = match unlock_with_vek(&kk) {
-                                Ok(()) => Ok(Outcome::Unlocked),
+                                Ok(()) => Ok(()),
                                 Err(Error::Corrupt) | Err(Error::NotAVault) => {
                                     bridge::bio_disable(); // the stored key no longer matches this vault
                                     Err("Biometric unlock is out of date. Use your master password.".to_string())

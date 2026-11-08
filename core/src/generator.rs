@@ -1,6 +1,5 @@
 //! A configurable password generator: length, character sets and look-alike removal.
 //! Every selected set is guaranteed to appear at least once; the rest is uniform over the pool.
-use crate::vault::random_bytes;
 use serde::{Deserialize, Serialize};
 
 pub const MIN_LEN: usize = 8;
@@ -83,6 +82,13 @@ impl GenOptions {
         let o = self.normalized();
         o.length as f64 * (o.pool_size() as f64).log2()
     }
+}
+
+/// `n` random bytes from the operating system.
+pub(crate) fn random_bytes(n: usize) -> Vec<u8> {
+    let mut v = vec![0u8; n];
+    getrandom::getrandom(&mut v).expect("the OS random number generator failed");
+    v
 }
 
 /// Uniform random number below `n` (n > 0), without modulo bias.

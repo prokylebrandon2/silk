@@ -13,7 +13,7 @@
 //! 91 bytes. Because the VEK is separate from the password, changing the password only re-wraps
 //! the VEK: the big `.skln` file isn't touched.
 use crate::error::Error;
-use crate::vault::{derive_key_raw, Kdf};
+use crate::kdf::{derive_key, Kdf};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use zeroize::Zeroizing;
@@ -61,7 +61,7 @@ impl KeySlot {
         let mut nonce = [0u8; NONCE_LEN];
         getrandom::getrandom(&mut salt).map_err(|_| Error::Random)?;
         getrandom::getrandom(&mut nonce).map_err(|_| Error::Random)?;
-        let kek = derive_key_raw(password, key_file, kdf, &salt)?;
+        let kek = derive_key(password, key_file, kdf, &salt)?;
         let mut slot = KeySlot {
             key_file: key_file.is_some(),
             kdf,
@@ -99,7 +99,7 @@ impl KeySlot {
         if !self.key_file && key_file.is_some() {
             return Err(Error::KeyFileNotUsed);
         }
-        let kek = derive_key_raw(password, key_file, self.kdf, &self.salt)?;
+        let kek = derive_key(password, key_file, self.kdf, &self.salt)?;
         let aad = self.header_bytes();
         let cipher = Aes256Gcm::new_from_slice(&kek[..]).map_err(|_| Error::Crypto)?;
         let plain = cipher

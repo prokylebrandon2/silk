@@ -1,46 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openVault, parseHeader } from '../src/vault.js';
-import { sealVault, sealBundle } from './helpers.js';
+import { sealBundle } from './helpers.js';
 import { parseOtp, totpCode, secondsLeft, groupCode } from '../src/totp.js';
 import { urlMatches, hostOf } from '../src/match.js';
 
 const entry = { id: 'a', title: 'GitHub', username: 'me', password: 'pw', url: 'https://github.com', otp: 'JBSWY3DPEHPK3PXP', notes: '' };
 
-test('opens a vault with and without a key file', async () => {
-  const kf = new Uint8Array(64).fill(7);
-  const withKf = await sealVault([entry], 'correct horse', kf);
-  assert.equal(parseHeader(withKf).keyFile, true);
-  const back = await openVault(withKf, 'correct horse', kf);
-  assert.equal(back.length, 1);
-  assert.equal(back[0].title, 'GitHub');
-  assert.equal(back[0].otp, 'JBSWY3DPEHPK3PXP');
-  await assert.rejects(openVault(withKf, 'wrong', kf), { code: 'wrong-credentials' });
-  await assert.rejects(openVault(withKf, 'correct horse', null), { code: 'key-file-required' });
-
-  const plain = await sealVault([entry], 'password1', null);
-  assert.equal((await openVault(plain, 'password1', null)).length, 1);
-  await assert.rejects(openVault(plain, 'password1', kf), { code: 'key-file-not-used' });
-});
-
-test('rejects tampering and non-vault files', async () => {
-  const v = await sealVault([entry], 'password1', null);
-  const flipped = v.slice();
-  flipped[flipped.length - 1] ^= 1;
-  await assert.rejects(openVault(flipped, 'password1', null), { code: 'wrong-credentials' });
-  const hdr = v.slice();
-  hdr[9] ^= 1; // the header is authenticated
-  await assert.rejects(openVault(hdr, 'password1', null));
-  assert.throws(() => parseHeader(new TextEncoder().encode('not a vault file at all, no no no no no no no no no')), { code: 'not-a-vault' });
-  const absurd = v.slice();
-  new DataView(absurd.buffer).setUint32(10, 0xffffffff);
-  assert.throws(() => parseHeader(absurd), { code: 'corrupt' });
-});
-
 test('opens a Silk backup (key slot + vault file) with and without a key file', async () => {
   const kf = new Uint8Array(64).fill(7);
   const withKf = await sealBundle([entry], 'correct horse', kf);
-  assert.equal(parseHeader(withKf).kind, 'silk');
   assert.equal(parseHeader(withKf).keyFile, true);
   const back = await openVault(withKf, 'correct horse', kf);
   assert.equal(back.length, 1);
@@ -54,8 +23,6 @@ test('opens a Silk backup (key slot + vault file) with and without a key file', 
   assert.equal(parseHeader(plain).keyFile, false);
   assert.equal((await openVault(plain, 'password1', null)).length, 1);
   await assert.rejects(openVault(plain, 'password1', kf), { code: 'key-file-not-used' });
-  // Old .pvlt files keep working next to the new kind.
-  assert.equal(parseHeader(await sealVault([entry], 'password1', null)).kind, 'legacy');
 });
 
 test('rejects a tampered or truncated Silk backup', async () => {
@@ -74,6 +41,7 @@ test('rejects a tampered or truncated Silk backup', async () => {
   revision[SLOT_END + 13] ^= 1; // the revision is authenticated too
   await assert.rejects(openVault(revision, 'password1', null), { code: 'corrupt' });
   assert.throws(() => parseHeader(b.slice(0, 60)), { code: 'not-a-vault' });
+  assert.throws(() => parseHeader(new TextEncoder().encode('not a vault file at all, no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no no')), { code: 'not-a-vault' });
   const wrongVersion = b.slice();
   wrongVersion[4] = 9;
   assert.throws(() => parseHeader(wrongVersion), { code: 'not-a-vault' });
@@ -82,19 +50,9 @@ test('rejects a tampered or truncated Silk backup', async () => {
   assert.throws(() => parseHeader(absurd), { code: 'corrupt' });
 });
 
-test('still opens a Silk backup whose vault file is the stand-in "SKIM" kind', async () => {
-  const kf = new Uint8Array(64).fill(7);
-  const old = await sealBundle([entry], 'correct horse', kf, undefined, 5, 'interim');
-  assert.equal(parseHeader(old).kind, 'silk');
-  assert.equal(old[5 + 91], 0x53); // "SKIM", not the .skln magic
-  const back = await openVault(old, 'correct horse', kf);
-  assert.equal(back[0].title, 'GitHub');
-  await assert.rejects(openVault(old, 'wrong', kf), { code: 'wrong-credentials' });
-});
-
 test('opens a .skln vault that spans many records', async () => {
   const many = Array.from({ length: 200 }, (_, i) => ({ ...entry, id: String(i), title: `Site ${i}`, notes: 'n'.repeat(150) }));
-  const b = await sealBundle(many, 'password1', null, undefined, 9, 'skln', 12);
+  const b = await sealBundle(many, 'password1', null, undefined, 9, 12);
   const vault = b.subarray(5 + 91);
   assert.ok(vault.length > 5 * 4096, 'more than a few 4 KiB records');
   const back = await openVault(b, 'password1', null);
@@ -105,7 +63,7 @@ test('opens a .skln vault that spans many records', async () => {
 
 test('rejects a damaged .skln vault file', async () => {
   const many = Array.from({ length: 100 }, (_, i) => ({ ...entry, id: String(i), notes: 'n'.repeat(150) }));
-  const b = await sealBundle(many, 'password1', null, undefined, 3, 'skln', 12);
+  const b = await sealBundle(many, 'password1', null, undefined, 3, 12);
   const at = 5 + 91; // where the .skln starts
   const record = 4 + 4096 + 16; // a full record with chunk_log2 = 12
   const flip = (offset) => {

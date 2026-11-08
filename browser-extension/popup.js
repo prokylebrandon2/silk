@@ -91,7 +91,7 @@ function renderMessages() {
 function renderImport() {
   app.innerHTML = `
     <h1>Silk</h1>
-    <p>Add your vault to this browser. In the Android app open <b>More</b> and tap <b>Back up vault</b>, move the <code>.silk</code> file to this computer, then choose it here (an older <code>.pvlt</code> backup works too). It stays encrypted; only your master password opens it.</p>
+    <p>Add your vault to this browser. In the Android app open <b>More</b> and tap <b>Back up vault</b>, move the <code>.silk</code> file to this computer, then choose it here. It stays encrypted; only your master password opens it.</p>
     <input id="file" type="file" hidden>
     <button class="primary" id="pick">Choose vault file</button>
     <div id="messages">${messages()}</div>`;

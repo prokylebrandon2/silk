@@ -1,4 +1,4 @@
-//! The unlock and save flow from the architecture diagram, over the cloud copy of the vault.
+//! The unlock and save flow over the vault's two stored objects (key slot and vault file).
 //!
 //! ```text
 //! master password ──Argon2id──> key ──unwraps──> VEK ──archiver──> vault file (entries)
@@ -11,10 +11,11 @@
 //! the unlocked state (VEK + entries, both wiped on drop). The pure functions work on byte
 //! buffers; `unlock_remote` / `save_remote` add the cloud round trips through a [`RemoteStore`].
 use crate::archive::{self, Archiver, Member};
+use crate::entry::Entry;
 use crate::error::Error;
+use crate::kdf::Kdf;
 use crate::keyslot::KeySlot;
 use crate::remote::{Object, RemoteStore};
-use crate::vault::{Entry, Kdf, Vault};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -38,7 +39,7 @@ pub struct Bundle {
     pub vault_file: Vec<u8>,
 }
 
-/// Which branch of the diagram's "subsequent unlock?" decision ran.
+/// Which branch of `unlock_remote` ran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flow {
     /// Nothing in the cloud yet: a random VEK was created and stored.
@@ -126,19 +127,6 @@ impl CloudVault {
         })
     }
 
-    /// Imports a legacy `.pvlt` vault: same password and key file, new VEK + key slot + entries.
-    pub fn migrate_legacy(
-        pvlt: &[u8],
-        password: &str,
-        key_file: Option<&[u8]>,
-        kdf: Kdf,
-    ) -> Result<CloudVault, Error> {
-        let old = Vault::open(pvlt, password, key_file)?;
-        let mut silk = CloudVault::setup(password, key_file, kdf)?;
-        silk.entries = old.entries.clone();
-        Ok(silk)
-    }
-
     /// Encrypts the current entries into a fresh vault file (revision + 1) and returns both objects.
     pub fn seal(&mut self) -> Result<Bundle, Error> {
         let next = self.revision.checked_add(1).ok_or(Error::Corrupt)?;
@@ -195,7 +183,7 @@ impl CloudVault {
         self.slot.uses_key_file()
     }
 
-    /// The whole diagram in one call. Reads the key slot from the cloud; if there is none, creates
+    /// The whole flow in one call. Reads the key slot from the cloud; if there is none, creates
     /// the VEK and stores everything (first-time setup), otherwise unwraps it and decrypts the vault file.
     pub fn unlock_remote(
         store: &dyn RemoteStore,
@@ -370,22 +358,6 @@ mod tests {
         assert_eq!(
             CloudVault::unlock_with_vek(&b.keyslot, Some(&b.vault_file), &[0u8; 32]).err(),
             Some(Error::Corrupt)
-        );
-    }
-
-    #[test]
-    fn legacy_pvlt_vaults_migrate() {
-        let mut old = Vault::create("password1", None, FAST).unwrap();
-        old.upsert(entry("1", "Old login"));
-        let bytes = old.seal().unwrap();
-
-        let mut silk = CloudVault::migrate_legacy(&bytes, "password1", None, FAST).unwrap();
-        let b = silk.seal().unwrap();
-        let back = CloudVault::unlock(&b.keyslot, Some(&b.vault_file), "password1", None).unwrap();
-        assert_eq!(back.entries[0].title, "Old login");
-        assert_eq!(
-            CloudVault::migrate_legacy(&bytes, "wrong", None, FAST).err(),
-            Some(Error::WrongCredentials)
         );
     }
 }

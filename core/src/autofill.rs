@@ -1,6 +1,6 @@
 //! Decides what to fill. The Android glue flattens the form into JSON; this module finds the
 //! username and password fields, picks matching logins and answers with JSON.
-use crate::vault::Entry;
+use crate::entry::Entry;
 use serde::Deserialize;
 use serde_json::json;
 

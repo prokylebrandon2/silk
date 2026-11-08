@@ -4,8 +4,8 @@
 //!
 //! Proton Pass JSON: `{"vaults": {id: {"name", "items": [{"data": {"type", "metadata": {"name", "note"},
 //! "content": {...}}, "state"}]}}}`. Proton Pass CSV: `type,name,url,email,username,password,note,totp,createTime,modifyTime,vault`.
+use crate::entry::{new_id, Entry};
 use crate::error::Error;
-use crate::vault::{new_id, Entry};
 use serde_json::{json, Value};
 
 /// What an import found.

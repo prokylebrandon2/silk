@@ -143,7 +143,7 @@ fn parse_login(tail: &[u8]) -> Option<Login> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vault::{derive_key_raw, Kdf};
+    use crate::kdf::{derive_key, Kdf};
 
     const FAST: Kdf = Kdf {
         t: 1,
@@ -183,8 +183,8 @@ mod tests {
         kf.set_login(Some(login()));
         let with = kf.to_bytes();
         let salt = [7u8; 16];
-        let a = derive_key_raw("password1", Some(&bare), FAST, &salt).unwrap();
-        let b = derive_key_raw("password1", Some(&with), FAST, &salt).unwrap();
+        let a = derive_key("password1", Some(&bare), FAST, &salt).unwrap();
+        let b = derive_key("password1", Some(&with), FAST, &salt).unwrap();
         assert_eq!(&a[..], &b[..]);
     }
 
@@ -200,8 +200,8 @@ mod tests {
         silk.push(VERSION);
         silk.extend_from_slice(&raw);
         let salt = [3u8; 16];
-        let from_raw = derive_key_raw("password1", Some(&raw), FAST, &salt).unwrap();
-        let from_silk = derive_key_raw("password1", Some(&silk), FAST, &salt).unwrap();
+        let from_raw = derive_key("password1", Some(&raw), FAST, &salt).unwrap();
+        let from_silk = derive_key("password1", Some(&silk), FAST, &salt).unwrap();
         assert_eq!(&from_raw[..], &from_silk[..]);
     }
 

@@ -74,8 +74,6 @@ pub fn run(
         Mode::UseCloud => {
             let slot = c_slot.ok_or(Error::NotAVault)?;
             download(local, &slot, c_file.as_deref(), true)?;
-            // An old .pvlt is given up here: the user chose the cloud vault over everything on this device.
-            local.remove_legacy()?;
             local.link(uid)?;
             return Ok(Report::Downloaded);
         }
@@ -83,10 +81,9 @@ pub fn run(
     }
 
     let Some(l_slot) = l_slot else {
-        // Nothing usable on this device yet (or only an old .pvlt that hasn't been converted).
+        // Nothing on this device yet.
         return match c_slot {
             None => Ok(Report::UpToDate),
-            Some(_) if local.has_legacy() => Ok(Report::Unlinked),
             Some(_) if mode == Mode::Push => Ok(Report::UpToDate),
             Some(slot) => {
                 download(local, &slot, c_file.as_deref(), false)?;
@@ -187,9 +184,10 @@ fn download(
 mod tests {
     use super::*;
     use crate::cloud::CloudVault;
+    use crate::entry::{new_id, Entry};
+    use crate::kdf::Kdf;
     use crate::remote::MemoryStore;
-    use crate::session::{self, Unlocked};
-    use crate::vault::{new_id, Entry, Kdf};
+    use crate::session;
 
     const FAST: Kdf = Kdf {
         t: 1,
@@ -215,7 +213,7 @@ mod tests {
     /// A device that has just created its own vault (revision 1).
     fn new_device(password: &str) -> (DirStore, CloudVault) {
         let store = temp_store();
-        let Unlocked { vault, .. } = session::unlock(&store, password, None, FAST).unwrap();
+        let vault = session::unlock(&store, password, None, FAST).unwrap();
         (store, vault)
     }
 
@@ -248,9 +246,7 @@ mod tests {
             run(&b, &cloud, UID, Mode::Sync).unwrap(),
             Report::Downloaded
         );
-        let Unlocked {
-            vault: mut b_vault, ..
-        } = session::unlock(&b, "password1", None, FAST).unwrap();
+        let mut b_vault = session::unlock(&b, "password1", None, FAST).unwrap();
         change(&b, &mut b_vault, "from B");
         assert_eq!(run(&b, &cloud, UID, Mode::Push).unwrap(), Report::Uploaded);
 
@@ -263,7 +259,7 @@ mod tests {
             run(&a, &cloud, UID, Mode::Sync).unwrap(),
             Report::Downloaded
         );
-        let Unlocked { vault, .. } = session::unlock(&a, "password1", None, FAST).unwrap();
+        let vault = session::unlock(&a, "password1", None, FAST).unwrap();
         assert_eq!(vault.entries.len(), 1);
         assert_eq!(vault.entries[0].title, "from B");
 
@@ -338,9 +334,7 @@ mod tests {
         run(&a, &cloud, UID, Mode::Sync).unwrap();
         let b = temp_store();
         run(&b, &cloud, UID, Mode::Sync).unwrap();
-        let Unlocked {
-            vault: mut b_vault, ..
-        } = session::unlock(&b, "password1", None, FAST).unwrap();
+        let mut b_vault = session::unlock(&b, "password1", None, FAST).unwrap();
 
         change(&a, &mut a_vault, "A");
         run(&a, &cloud, UID, Mode::Push).unwrap(); // cloud is at revision 2 from A
@@ -375,17 +369,5 @@ mod tests {
             run(&a, &orphan, UID, Mode::Sync).err(),
             Some(Error::Corrupt)
         );
-    }
-
-    #[test]
-    fn an_old_pvlt_waiting_to_be_converted_is_not_replaced_by_a_cloud_download() {
-        let (a, _) = new_device("password1");
-        let cloud = MemoryStore::new();
-        run(&a, &cloud, UID, Mode::Sync).unwrap();
-        let b = temp_store();
-        b.write_legacy(b"old vault bytes").unwrap();
-        assert_eq!(run(&b, &cloud, UID, Mode::Sync).unwrap(), Report::Unlinked);
-        assert!(b.has_legacy());
-        assert!(!b.has(Object::KeySlot));
     }
 }

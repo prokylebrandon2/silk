@@ -1,4 +1,4 @@
-<h1 align="center">Silk</h1>
+<h1 align="center">Silk - A Password Manager for Larpers</h1>
 
 <p align="center">
   <img src="assets/silk-icon.png" alt="Silk" width="112">
@@ -9,8 +9,6 @@
 It securely stores your passwords, generates strong passwords, fills login forms automatically, and generates two-factor authentication codes (TOTP).
 
 You can also enable optional cloud sync to keep your vault backed up across devices. Your vault is encrypted before it leaves your device, so Supabase only stores encrypted data.
-
-> **Previously known as PassVault.** Android treats Silk (`app.silk`) as a separate app, so existing vaults move over with a backup; see [Restoring an existing vault](#restoring-an-existing-vault). The old `.pvlt` format is still read, so old vaults and backups keep working.
 
 ---
 
@@ -27,18 +25,6 @@ You can also enable optional cloud sync to keep your vault backed up across devi
 - **Brave and Chrome extension** — Use a read-only copy of your vault in a Chromium-based browser.
 
 ## Getting started
-
-### Restoring an existing vault
-
-To move from an older PassVault installation:
-
-1. Open PassVault and create a backup using its backup feature.
-2. Install Silk.
-3. On Silk's first screen, select **Restore from backup**.
-4. Choose your existing `.silk` or `.pvlt` backup.
-5. Unlock your vault using your existing master password and key file, if one is required.
-
-Your old vault does not need to be manually converted beforehand.
 
 ### Enabling Android autofill
 
@@ -168,7 +154,7 @@ From the login list, use **Back up** to create a `.silk` backup containing:
 
 The backup is kept up to date after every change.
 
-The **Restore from backup** option is available on the create screen. It also accepts older `.pvlt` backups.
+To restore, choose **Restore from backup** on the first screen of a fresh install, pick the `.silk` file, then unlock with the vault's master password (and key file, if it uses one).
 
 Keep a separate copy of your backup somewhere safe. A backup stored only on your phone will not protect you if the phone is lost or damaged.
 
@@ -264,7 +250,7 @@ The vault automatically locks:
 - When the screen turns off.
 - When you leave the app using the Back button.
 
-Developers can adjust the default encryption settings in `core/src/vault.rs` (`Kdf::default`) and the idle timeout in `core/src/session.rs`.
+Developers can adjust the default encryption settings in `core/src/kdf.rs` (`Kdf::default`) and the idle timeout in `core/src/session.rs`.
 
 ---
 
@@ -347,7 +333,7 @@ You can also extract the `silk-brave-extension` artifact from the GitHub Actions
 **3. Unlock your vault**
 
 1. Click the Silk extension icon.
-2. Select your `.silk` backup. Older `.pvlt` backups are also supported.
+2. Select your `.silk` backup.
 3. Enter your master password.
 4. Provide your key file if your vault requires one.
 
@@ -415,7 +401,7 @@ The Java layer is intentionally small. It handles the Android APIs Rust cannot d
 
 ### Cloud architecture: VEK, Kiln, and Supabase
 
-The vault archive uses Kiln's `.skln` format, through the `kiln-skln` crate from the separate Kiln project. `core/src/skln.rs` connects it to the `Archiver` trait. Vault files of the older stand-in format (`core/src/interim.rs`) are still opened and are rewritten as `.skln` the first time they are unlocked.
+The vault archive uses Kiln's `.skln` format, through the `kiln-skln` crate from the separate Kiln project. `core/src/skln.rs` connects it to the `Archiver` trait.
 
 The flow, file formats, key file layout, and open work are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

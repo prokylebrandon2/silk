@@ -5,9 +5,7 @@
 //! "SKBK" | version u8 | key slot (91 bytes) | vault file (the rest)
 //! ```
 //!
-//! Both parts are already encrypted; the bundle adds nothing secret. Old backups from before the
-//! key slot existed are plain `.pvlt` files (see `vault`) and are still accepted by
-//! `Session::import`, which converts them on the next unlock.
+//! Both parts are already encrypted; the bundle adds nothing secret.
 use crate::archive::{self, Archiver};
 use crate::error::Error;
 use crate::keyslot::{KeySlot, KEYSLOT_LEN};
@@ -44,7 +42,7 @@ pub fn unpack(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Error> {
 mod tests {
     use super::*;
     use crate::archive::Member;
-    use crate::vault::Kdf;
+    use crate::kdf::Kdf;
 
     const FAST: Kdf = Kdf {
         t: 1,

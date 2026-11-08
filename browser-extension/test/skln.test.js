@@ -68,7 +68,7 @@ test('opens a .skln written with several record sizes, and reads its header with
 
 test('a file that is not a .skln is refused', async () => {
   assert.equal(isSkln(new Uint8Array(3)), false);
-  assert.throws(() => parseSkln(new TextEncoder().encode('SKIM and some more bytes, long enough for a header....')), { code: 'not-skln' });
+  assert.throws(() => parseSkln(new TextEncoder().encode('SKBK and some more bytes, long enough for a header....')), { code: 'not-skln' });
   const file = sealSkln(randomBytes(32), [['a', new Uint8Array(1)]], 1, 12);
   const wrongVersion = file.slice();
   wrongVersion[8] = 2;

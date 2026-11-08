@@ -1,8 +1,7 @@
 //! The archive layer: what turns the entries into the encrypted vault file stored next to the key slot.
 //!
 //! The archive is Kiln's `.skln` (the `kiln-skln` crate; the format is in Kiln's `docs/FORMAT.md`),
-//! connected by [`crate::skln`]. Everything above this layer talks to [`Archiver`] only. Vault
-//! files from the stand-in format that came first ([`crate::interim`]) are still read, never written.
+//! connected by [`crate::skln`]. Everything above this layer talks to [`Archiver`] only.
 //!
 //! What the flow needs from an archiver:
 //! - **A raw 32-byte key.** Silk runs Argon2id itself and hands over the VEK. A password-based

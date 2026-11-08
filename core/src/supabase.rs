@@ -974,10 +974,11 @@ mod tests {
 
     mod flow {
         use super::*;
+        use crate::entry::{new_id, Entry};
+        use crate::kdf::Kdf;
         use crate::local::DirStore;
-        use crate::session::{self, Unlocked};
+        use crate::session;
         use crate::sync::{self, Mode, Report};
-        use crate::vault::{new_id, Entry, Kdf};
 
         const FAST: Kdf = Kdf {
             t: 1,
@@ -1014,7 +1015,7 @@ mod tests {
                 let world = World::new(quirky);
                 let tok = token("a");
                 let a = device();
-                let Unlocked { mut vault, .. } = session::unlock(&a, MASTER, None, FAST).unwrap();
+                let mut vault = session::unlock(&a, MASTER, None, FAST).unwrap();
                 vault.upsert(login("Bank"));
                 vault.save_remote(&a).unwrap();
 
@@ -1035,11 +1036,11 @@ mod tests {
                     sync::run(&b, &st, UID, Mode::Sync).unwrap(),
                     Report::Downloaded
                 );
-                let Unlocked { vault, .. } = session::unlock(&b, MASTER, None, FAST).unwrap();
+                let vault = session::unlock(&b, MASTER, None, FAST).unwrap();
                 assert_eq!(vault.entries[0].title, "Bank");
 
                 // Device B saves; the replace goes through PUT and A picks it up.
-                let Unlocked { mut vault, .. } = session::unlock(&b, MASTER, None, FAST).unwrap();
+                let mut vault = session::unlock(&b, MASTER, None, FAST).unwrap();
                 vault.upsert(login("Mail"));
                 vault.save_remote(&b).unwrap();
                 assert_eq!(
@@ -1058,7 +1059,7 @@ mod tests {
         fn only_the_two_encrypted_files_are_uploaded() {
             let world = World::new(false);
             let a = device();
-            let Unlocked { mut vault, .. } = session::unlock(&a, MASTER, None, FAST).unwrap();
+            let mut vault = session::unlock(&a, MASTER, None, FAST).unwrap();
             vault.upsert(login("My Bank Login"));
             vault.save_remote(&a).unwrap();
             let st = store(&world, &token("a"));
@@ -1104,7 +1105,7 @@ mod tests {
             let world = World::new(false);
             world.deny_writes.set(true);
             let a = device();
-            let Unlocked { mut vault, .. } = session::unlock(&a, MASTER, None, FAST).unwrap();
+            let mut vault = session::unlock(&a, MASTER, None, FAST).unwrap();
             vault.upsert(login("Bank"));
             vault.save_remote(&a).unwrap();
             let before = (
@@ -1135,7 +1136,7 @@ mod tests {
         fn a_token_that_belongs_to_somebody_else_sends_nothing_and_changes_nothing() {
             let world = World::new(false);
             let a = device();
-            let Unlocked { mut vault, .. } = session::unlock(&a, MASTER, None, FAST).unwrap();
+            let mut vault = session::unlock(&a, MASTER, None, FAST).unwrap();
             vault.upsert(login("Bank"));
             vault.save_remote(&a).unwrap();
             let before = (

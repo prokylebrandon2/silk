@@ -1,6 +1,6 @@
 //! Process-wide state shared by the UI thread and the JNI entry points (autofill runs on Java threads).
 use silk_core::auth::Auth;
-use silk_core::session::{Outcome, Session};
+use silk_core::session::Session;
 use silk_core::supabase;
 use silk_core::{autofill, sync, Error};
 use std::collections::VecDeque;
@@ -53,8 +53,8 @@ pub enum Event {
         name: Option<String>,
         data: Option<Vec<u8>>,
     },
-    /// Result of the background unlock, create or conversion of an old vault.
-    Unlocked(Result<Outcome, String>),
+    /// Result of the background unlock or create.
+    Unlocked(Result<(), String>),
     /// Result of a biometric prompt. `op`: 1 enroll, 2 unlock. `status`: 0 ok, 1 cancelled, 2 failed, 3 invalidated.
     Bio {
         op: i32,

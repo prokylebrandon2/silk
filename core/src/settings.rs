@@ -59,7 +59,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vault::new_id;
+    use crate::entry::new_id;
 
     fn temp_dir() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("silk-settings-{}", new_id()))
