@@ -1,5 +1,4 @@
 //! The UI controller: wires Slint callbacks to the session, the JNI bridge and the background unlock thread.
-#![allow(unused_mut)]
 
 use crate::bridge;
 use crate::state::{self, AuthHow, Event};
@@ -77,6 +76,8 @@ macro_rules! handler {
         let (weak, shared) = ($ui.as_weak(), $ctl.clone());
         $ui.$reg(move || {
             let $u = weak.unwrap();
+            // Some handlers only read the state, so the `mut` is not needed in every expansion.
+            #[allow(unused_mut)]
             let mut $c = shared.borrow_mut();
             $body
         });

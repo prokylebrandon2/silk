@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 MAX_FILE_KB=512        # one tracked file (the 1024 px icon master is the largest, ~410 KB)
 MAX_TRACKED_KB=2048    # all tracked files together (about 1.2 MB today)
 MAX_LOCK_PACKAGES=560  # packages in Cargo.lock (545 today, nearly all of them Slint's)
-MAX_CORE_CRATES=56     # crates silk-core pulls in at run time (51 before kiln-skln, which adds five)
+MAX_CORE_CRATES=56     # crates silk-core pulls in at run time (47 counted today, kiln-skln and its five included)
 # Crates that mean "a second way of doing something we already do". All network goes through the
 # `Http` trait in core/src/auth.rs and android/.../Net.java.
 FORBIDDEN_CRATES="reqwest hyper ureq openssl native-tls rustls curl clap anyhow rand serde_yaml async-std"
@@ -104,8 +104,10 @@ for c in $FORBIDDEN_CRATES; do
 done
 
 if command -v cargo >/dev/null 2>&1; then
-  n=$(cargo tree -p silk-core -e normal --prefix none 2>/dev/null |
-    sed 's/ (\*)$//' |
+  # --no-dedupe: without it cargo marks repeated subtrees with " (*)", so the same crate shows up as
+  # two different lines and is counted twice. tr drops the CR that a Windows toolchain adds.
+  n=$(cargo tree -p silk-core -e normal --prefix none --no-dedupe 2>/dev/null |
+    tr -d '\r' |
     sort -u |
     grep -v '^silk-core v' |
     wc -l)

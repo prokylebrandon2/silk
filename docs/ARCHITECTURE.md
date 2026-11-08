@@ -1,13 +1,13 @@
 # Silk architecture: Silk, Kiln, VEK and Supabase
 
-This is the written form of the flow diagram. Status of each piece is in the task list at the bottom.
+How Silk's pieces fit together: names, flow, file formats, cloud layout. Open work is listed at the bottom.
 
 ## Names
 
 | Name | Meaning | Where it lives |
 |---|---|---|
 | **Silk** | This app: the password manager, formerly called PassVault. Master-password entry, unlock/save, the unlocked state in memory. | this repository |
-| **Kiln** | A separate project: a multicore archiver (Rust engine + Android app) with its own container format. Today it writes `.kiln` v2 archives (you call them `.kln`; in Kiln's own docs `.kln` is the original Python app's format). | `kiln-rust` repository |
+| **Kiln** | A separate project: a multicore archiver with its own container formats. Silk uses only its small `kiln-skln` crate. | `kiln-rust` repository |
 | **`.skln`** | Kiln's container for encrypted data (the `kiln-skln` crate, format in Kiln's `docs/FORMAT.md`). Silk stores its entries in one, keyed by the VEK, as `vault.skln`. | Kiln: `skln/`; Silk: `core/src/skln.rs` |
 | **VEK** | Vault Encryption Key: 256 random bits, generated once at first-time setup. Encrypts the `.skln`. | in memory only; stored wrapped |
 | **Key** | The Argon2id output (the diagram's "key"; KEK in code comments). Only ever wraps the VEK. | derived on demand, never stored |
@@ -42,27 +42,14 @@ flowchart TD
 ```
 
 Saving: the archiver re-encrypts the entries with the VEK under a fresh nonce and revision + 1, then Silk stores the result.
-Changing the master password: only the key slot is re-wrapped and stored; the vault file is untouched.
 
-## Where this differs from the drawing
+Argon2id comes after the key-slot fetch, because the salt and cost settings are stored in the key slot. The `.skln` is encrypted with the VEK, not with the Argon2id key.
 
-1. **YES/NO on "Subsequent unlock?" are swapped in the diagram.** As drawn, YES creates a random VEK and NO retrieves it. The code does the logical thing: no key slot in the cloud means first-time setup; a key slot means subsequent unlock.
-2. **Argon2id comes after the key-slot fetch, not before the decision.** The salt and cost settings are stored in the key slot, so Silk must fetch it before it can derive the key.
-3. **The `.skln` is encrypted with the VEK, not with the Argon2id key directly.** The right-hand path in the drawing (retrieve VEK, decrypt VEK, Kiln decrypts `.skln`) only makes sense that way.
+Changing the master password would re-wrap only the key slot and leave the vault file untouched. `CloudVault::change_credentials` does that, but only tests call it: the app has no screen for it yet (see Open work).
 
-## What Silk needs from `.skln` (the contract for the Kiln side)
+## The `.skln` dependency
 
-I read the Kiln repository to see what exists. Kiln's public API (`pack`, `Archive::open`, `extract`) works on file paths, and its password lock (`kiln-bridge/src/lock.rs`) wraps a whole plain archive in scrypt + ChaCha20-Poly1305 records and uses scratch folders and `/dev/urandom`. That is the right idea but not what Silk can call as is. For `.skln`, Silk needs:
-
-1. **A raw 32-byte key, no password KDF.** Silk runs Argon2id itself (that is the diagram) and hands over the VEK. A second KDF (scrypt) inside the archive would be redundant.
-2. **An in-memory API: bytes in, bytes out.** No paths, no temp files. The vault is a few hundred KB. Randomness through `getrandom` (works on Android and everywhere else), not `/dev/urandom`.
-3. **An authenticated revision counter** in the plain header, readable without the key. Silk uses it to notice a server replaying an old file.
-4. **A lean dependency set.** The `kiln` crate currently pulls `clap`, `anyhow`, `walkdir`, `tempfile`, `zstd` and `liblzma` (C code) unconditionally. Silk's Android library is built for size (`opt-level = "z"`), so either a feature flag that builds only the `.skln` reader/writer, or a small separate crate for it, would keep Silk's `.so` from growing by the whole archiver.
-5. **Toolchain:** Kiln is edition 2024 / Rust 1.88; Silk's workspace is edition 2021 and CI pins an older toolchain. Depending on Kiln means Silk's CI moves to Rust 1.88 or later. The UI crates differ too (Silk uses Slint 1.8, Kiln 1.18.1 with Skia); that only matters if both ever share one Cargo workspace, and a dependency on the `kiln` crate alone avoids it.
-6. **Cipher choice is open.** Kiln uses ChaCha20-Poly1305, Silk's key slot uses AES-256-GCM. Either works for a random VEK; using one for both keeps the Android library smaller.
-7. **The browser extension reads the vault in JavaScript today.** If it should open `.skln`, the format needs a JS reader too (Kiln has none), so a simple, well-specified container is worth it.
-
-**Status: built.** Kiln has a separate crate, `kiln-skln` (`skln/` in the Kiln repository, edition 2021, depending on `chacha20poly1305`, `hkdf`, `sha2`, `getrandom` and `zeroize`), with the raw-key seal and open, the authenticated revision in the plain header and the member bundle Silk keeps its entries in. Points 1 to 4 and 7 are met by it and by `browser-extension/src/skln.js`. Point 5 did not arise: the crate is edition 2021 and Silk's CI uses the stable toolchain. Point 6: the vault file is ChaCha20-Poly1305 and the key slot stays AES-256-GCM. `core/src/skln.rs` is the `Archiver` for it and `archive::Current` points at it; nothing in `cloud.rs`, `keyslot.rs` or `remote.rs` changed. `interim.rs` stays as a read-only source: a device that holds a vault in the interim format opens it and rewrites it as `.skln` on the first unlock (see Known limits).
+`core/src/skln.rs` is the `Archiver` for Kiln's `.skln` and `archive::Current` points at it. It uses the `kiln-skln` crate (`skln/` in the Kiln repository, edition 2021, depending on `chacha20poly1305`, `hkdf`, `sha2`, `getrandom` and `zeroize`): raw-key seal and open on bytes, no paths or temp files, an authenticated revision in the plain header, and the member bundle Silk keeps its entries in. The vault file is ChaCha20-Poly1305; the key slot stays AES-256-GCM. The crate adds five crates to `silk-core` (see `MAX_CORE_CRATES` in `scripts/check-bloat.sh`). `browser-extension/src/skln.js` reads the same format in JavaScript. `interim.rs` stays as a read-only source for vaults written before `.skln` (see Known limits).
 
 ## Formats
 
@@ -157,49 +144,29 @@ The cloud account (who may download the files) and the master password (who can 
 4. In the app: **More > Cloud sync > Sign in or create account.** Use a Silk key file (create one on the unlock screen) so the sign-in is saved and the next start signs in by itself.
 5. Run `powershell -ExecutionPolicy Bypass -File .\supabase\smoke-test.ps1` (read-only), then with `-Write` for an upload, replace and delete round trip, before trusting it with a real vault.
 
-### Why Supabase Auth and not Firebase Auth
+### One identity provider
 
-An earlier version signed users in with Firebase and sent the Firebase token to Supabase as a third-party login. Supabase only accepts such a token as a signed-in user when it carries the custom claim `role: authenticated`, and setting that claim needs server-side code with Firebase admin rights (a blocking function, which needs the paid Blaze plan). That was the one thing keeping cloud sync from working. Signing in with Supabase Auth removes the claim, the second provider, the Firebase project and `firebase.rs`. **Do not bring Firebase back** (or any other identity provider) without a reason that outweighs a second service, a server component and a larger app.
+Sign-in is Supabase Auth only. A third-party provider (Firebase was tried) needs a custom `role: authenticated` claim, which needs server-side code. Do not add another identity provider without a reason that outweighs a second service and a larger app.
 
 ## Known limits (by design, for now)
 
 - **Rollback:** the revision is authenticated, and the device keeps the highest one it has seen (`seen.rev`). Unlock and biometric unlock refuse a vault file with a lower revision (`Error::Rollback`); every save raises the mark. A file downloaded from the cloud goes through the same check before it replaces the local one. The mark is a plain file: someone who can write the app's private folder can also replace the vault, so this is aimed at a malicious server, not at an attacker with device access.
-- **No VEK rotation.** Changing the password re-wraps the same VEK. Rotating it needs the key slot and the vault file to change together, which two separate uploads can't do atomically.
+- **No VEK rotation.** Changing the password would re-wrap the same VEK. Rotating it needs the key slot and the vault file to change together, which two separate uploads can't do atomically.
 - **No merge.** Two devices saving from the same revision: sync reports a conflict and copies nothing; the next save on either device gets the next revision and then wins.
 - **Upload order** is key slot first, then vault file, so a half-finished first-time setup leaves a slot without a vault file (accepted as an empty vault), never a vault file nobody can open.
 - **Cloud sync is optional.** Without the Supabase values (`android/local.properties`) the app stays fully offline (it still declares `INTERNET`, but `Net.java` only accepts HTTPS to the one configured Supabase host, and nothing else).
 - **The sign-in in the key file is not encrypted yet** (see "The key file").
-- **Vaults written before `.skln` are converted on unlock.** A device that holds `vault.interim` (magic `SKIM`) opens it through `interim.rs`, which is now read-only, and the first unlock saves it again as `vault.skln` with the next revision, so the rollback mark stays valid, then removes `vault.interim`. A backup that embeds an interim vault file still restores and still opens in the extension. The cloud only accepts `vault.skln` now (the Storage policies no longer list `vault.interim`), so an interim copy left in a bucket is not read; sync has not been run against the live project yet (task 17).
+- **Vaults written before `.skln` are converted on unlock.** A device that holds `vault.interim` (magic `SKIM`) opens it through `interim.rs`, which is now read-only, and the first unlock saves it again as `vault.skln` with the next revision, so the rollback mark stays valid, then removes `vault.interim`. A backup that embeds an interim vault file still restores and still opens in the extension. The cloud only accepts `vault.skln` now (the Storage policies no longer list `vault.interim`), so an interim copy left in a bucket is not read; sync has not been run against the live project yet (see Open work).
 
-## The PassVault to Silk rename
+## Coming from PassVault
 
-Done everywhere: crates (`silk`, `silk-core`), the library (`libsilk.so`), the Android package and application ID (`app.silk`), the Java classes (`SilkActivity`, `SilkApp`), the JNI symbol names, `Theme.Silk`, the Gradle project name, the Slint components (`Silk*`), shared-preference and Keystore names, the CI artifacts and the extension's package name.
+PassVault was renamed to Silk everywhere. Left on purpose: the `PVLT` magic and `.pvlt` extension (the app and extension still read them; new backups are `.silk`), and the file name `core/src/vault.rs`, which holds `Entry`, `Kdf` and the key derivation next to the legacy `Vault` struct.
 
-Left on purpose:
+`app.silk` is a different app to Android: it installs next to the old `app.passvault`, does not update it and cannot read its data. To move over, use Back up in the old app (it saves a `.pvlt` file), install Silk, choose Restore from backup on its first screen and unlock with the same master password; the vault is converted then. Biometric unlock and autofill have to be set up again in Silk.
 
-- **The `PVLT` magic and `.pvlt` extension** identify the old container. The app and extension still read it (migration, old backups). New backups are `.silk`.
-- **`core/src/vault.rs` keeps its name** because `Entry`, `Kdf` and the key derivation live there; the legacy `Vault` struct in it is documented as such.
+## Open work
 
-**What the new application ID means for existing installs.** `app.silk` is a different app to Android. It installs next to the old `app.passvault`, does not update it and cannot read its data. To move over: in the old app use Back up (it saves a `.pvlt` file), install Silk, choose Restore from backup on its first screen and unlock with the same master password; the vault is converted then. The Keystore key behind biometric unlock is per app, so biometric unlock is set up again in Silk. Autofill has to be switched to Silk in Android's settings.
-
-## Tasks
-
-| # | Task | Status |
-|---|---|---|
-| 1 | Map the diagram to the codebase; this document | done (revised for Silk/Kiln) |
-| 2 | `Archiver` trait + interim stand-in archive (`archive.rs`, `interim.rs`) | done |
-| 3 | Key slot: Argon2id key wraps the VEK (`keyslot.rs`) | done |
-| 4 | `CloudVault` flow: setup, unlock, save, change password, legacy `.pvlt` migration, VEK export for biometrics, `RemoteStore` trait (`cloud.rs`, `remote.rs`) | done |
-| 5 | Cloud layout and access policies (`supabase/storage-policies.sql`) | done on paper; policies not yet run against the live project |
-| 6 | **Kiln repo (yours):** add `.skln` with the contract above | done: the `kiln-skln` crate (raw-key seal/open, member bundle, golden files written by an independent Python implementation) |
-| 7 | Add a Kiln-backed `Archiver`, switch `archive::Current`, convert interim vaults to `.skln` on unlock (keep `interim.rs` as the reader) | done (`skln.rs`, `session.rs`, `local.rs`); not compiled by the author: run `cargo test -p silk-core` |
-| 8 | Session uses `CloudVault`: local copy of key slot + vault file in private storage (offline unlock), migrate `vault.pvlt` on first unlock (`local.rs`, `session.rs`, `backup.rs`) | done, untested on a device |
-| 9 | Cloud transport: Supabase Auth (`auth.rs`) and Supabase Storage (`supabase.rs`, a `RemoteStore`) over an `Http` trait, carried by the Java glue (`Net.java`); `INTERNET` permission; project config (`local.properties`) | done with mocked tests; **not yet run against the live project** (do task 17), untested on a device |
-| 10 | Biometric unlock wraps the VEK (`export_vek` / `unlock_with_vek`) instead of the old vault key | done (stale keys are detected and reset) |
-| 11 | Sync safety: rollback detection from the revision, conflict handling (`sync.rs`: unrelated vaults and same-revision saves are never overwritten silently), VEK rotation with an atomic commit | partly: rollback guard and conflict handling done; rotation todo |
-| 12 | UI: first-time setup vs unlock, sync status, change password, migration prompt | partly: setup/unlock, a migration notice and the Cloud sync screens (sign in, sync status, Sync now, keep-or-use choice) exist; change password todo |
-| 13 | Browser extension reads key slot + vault file | done: `.skln`, the interim format and old `.pvlt` (`node --test` in `browser-extension/`) |
-| 14 | The deeper PassVault to Silk rename (package, crates, library) | done, see above |
-| 15 | Silk key file (`SKEY`) and automatic saving of the cloud sign-in in it (`keyfile.rs`, `ui.rs`, `SilkActivity.saveKeyFile`) | done, untested on a device |
-| 16 | **Kiln repo (yours):** security update and encryption engine, then encrypt the `.key` file inside a `.skln` | todo, after the Kiln security update; Silk's side is a later update |
-| 17 | Run the Storage policies and `supabase/smoke-test.ps1` against the real project (read-only, then `-Write`) before trusting sync with a real vault | todo: needs the live project, which the build sandbox can't reach |
+- **Run the Storage policies and `supabase/smoke-test.ps1`** against the real project (read-only, then `-Write`) before trusting sync with a real vault. Sync, the Supabase client and the policies are only tested against mocks, and the app is untested on a device.
+- **Change password screen.** The core part exists (`CloudVault::change_credentials`); the UI does not.
+- **VEK rotation** with an atomic commit of key slot and vault file. Needs more than two separate uploads.
+- **Encrypt the `.key` file inside a `.skln`**, after the security update in Kiln (see "The key file").

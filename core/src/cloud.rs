@@ -158,6 +158,7 @@ impl CloudVault {
     /// Changes the master password and/or key file. Only the small key slot is re-wrapped: the VEK
     /// and the vault file stay as they are. (The VEK is not rotated, so this does not revoke an old
     /// password for copies of the old key slot someone already holds.)
+    #[cfg(test)]
     pub fn change_credentials(
         &mut self,
         new_password: &str,

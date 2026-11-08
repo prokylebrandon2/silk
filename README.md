@@ -10,22 +10,14 @@ It securely stores your passwords, generates strong passwords, fills login forms
 
 You can also enable optional cloud sync to keep your vault backed up across devices. Your vault is encrypted before it leaves your device, so Supabase only stores encrypted data.
 
-> **Previously known as PassVault**
->
-> PassVault has been renamed to Silk. The rename covers the crates, libraries, Android package, application ID (`app.silk`), classes, and documentation.
->
-> The old `.pvlt` file format is intentionally preserved so existing vaults and backups remain compatible.
->
-> **Coming from PassVault?** Android treats Silk as a separate app because its application ID changed. Back up your vault from PassVault, install Silk, then choose **Restore from backup** on Silk's first screen.
->
-> See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for migration details.
+> **Previously known as PassVault.** Android treats Silk (`app.silk`) as a separate app, so existing vaults move over with a backup; see [Restoring an existing vault](#restoring-an-existing-vault). The old `.pvlt` format is still read, so old vaults and backups keep working.
 
 ---
 
 ## Features
 
 - **Offline-first password storage** — Your vault stays on your device and can be unlocked without an internet connection.
-- **Strong encryption** — Your vault is protected using Argon2id and AES-256-GCM.
+- **Strong encryption** — Your master password is stretched with Argon2id; the vault is encrypted with ChaCha20-Poly1305 and the key that protects it with AES-256-GCM.
 - **Optional key file** — Add another layer of protection using a file that only you have.
 - **Android autofill** — Fill usernames and passwords directly into supported apps and websites.
 - **Built-in authenticator** — Generate time-based one-time passwords (TOTP) without needing a separate authenticator app.
@@ -193,8 +185,8 @@ Silk uses a technique called *envelope encryption*. Instead of encrypting your e
 The process works like this:
 
 1. **Your master password is processed.** Silk first hashes the password input with SHA-256, then uses Argon2id to derive a 256-bit key.
-2. **The derived key protects the VEK.** The random VEK is stored in an encrypted key slot alongside the vault.
-3. **The VEK encrypts your vault.** Silk uses AES-256-GCM to encrypt the actual vault data.
+2. **The derived key protects the VEK.** The random VEK is stored in a key slot, encrypted with AES-256-GCM, alongside the vault.
+3. **The VEK encrypts your vault.** The vault is sealed in Kiln's `.skln` container with ChaCha20-Poly1305.
 4. **Unlocking reverses the process.** Silk derives the key again, uses it to unwrap the VEK, and then uses the VEK to decrypt the vault.
 
 The default Argon2id settings are:
@@ -207,8 +199,6 @@ The default Argon2id settings are:
 | Derived key size | 256 bits |
 
 A fresh random nonce is generated every time the vault is saved. Important vault headers, including the KDF settings, salt, and revision, are authenticated as well.
-
-**Changing your master password does not require encrypting the entire vault again.** Silk simply re-wraps the existing VEK with a key derived from your new password.
 
 ### Rollback protection
 
@@ -252,7 +242,7 @@ If you use a regular file of your own instead of a Silk-generated key file, Silk
 
 ### Important: Key file protection is still planned
 
-**Planned:** Silk will eventually support encrypting its `.key` file inside a `.skln` archive. This depends on the security update planned for Kiln, the separate archiving project that will provide Silk's future archive format.
+**Planned:** Silk will eventually encrypt its `.key` file inside a `.skln` container. This waits for the security update planned for Kiln, the separate archiving project that provides the `.skln` format.
 
 Until that feature is implemented, the key file is stored unencrypted wherever you save it. This includes any cloud refresh token stored inside it.
 
@@ -361,7 +351,7 @@ You can also extract the `silk-brave-extension` artifact from the GitHub Actions
 3. Enter your master password.
 4. Provide your key file if your vault requires one.
 
-The extension uses the same backup format as the Android app. It unwraps the VEK using Argon2id and decrypts the vault using AES-256-GCM. It has its own JavaScript Argon2 implementation, so unlocking takes a few seconds.
+The extension uses the same backup format as the Android app. It unwraps the VEK using Argon2id and decrypts the vault (ChaCha20-Poly1305 for `.skln`, AES-256-GCM for older vault files). It has its own JavaScript Argon2 implementation, so unlocking takes a few seconds.
 
 ### Extension security
 
@@ -421,17 +411,13 @@ Silk is primarily written in Rust, with a small Java layer for Android-specific 
 
 The core library contains no Android-specific code and can be tested on a regular development machine.
 
-The Java layer is intentionally small (approximately 450 lines, mostly comments and boilerplate). It handles the Android APIs Rust cannot directly provide and passes strings and bytes to the Rust implementation. It does not contain vault logic.
+The Java layer is intentionally small. It handles the Android APIs Rust cannot directly provide and passes strings and bytes to the Rust implementation. It does not contain vault logic.
 
 ### Cloud architecture: VEK, Kiln, and Supabase
 
-Silk uses envelope encryption with Supabase Auth and Supabase Storage.
-
-The master password derives a key that protects the VEK. The VEK then encrypts the vault archive.
-
 The vault archive uses Kiln's `.skln` format, through the `kiln-skln` crate from the separate Kiln project. `core/src/skln.rs` connects it to the `Archiver` trait. Vault files of the older stand-in format (`core/src/interim.rs`) are still opened and are rewritten as `.skln` the first time they are unlocked.
 
-The architecture diagram, file formats, key file layout, `.skln` details, and remaining implementation tasks are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The flow, file formats, key file layout, and open work are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Building Silk
 
@@ -483,8 +469,6 @@ Build the Android debug APK:
 ```bash
 gradle -p android assembleDebug
 ```
-
-**Remember to commit `Cargo.lock` after the first successful build.**
 
 ---
 
@@ -553,6 +537,7 @@ The following features are not implemented yet:
 - Saving new logins directly from other apps.
 - KeePass import.
 - Editing the vault through the browser extension.
+- Changing the master password from the app (the key slot can already be re-wrapped in `core`; there is no screen for it yet).
 - iOS app support.
 
 An iOS version would require a separate Swift credential-provider extension and a macOS build runner.
