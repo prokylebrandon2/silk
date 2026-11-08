@@ -1,4 +1,4 @@
-<h1 align="center">Silk - A Password Manager for Larpers</h1>
+<h1 align="center">Silk</h1>
 
 <p align="center">
   <img src="assets/silk-icon.png" alt="Silk" width="112">
