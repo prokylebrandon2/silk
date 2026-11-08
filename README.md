@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/silk-icon.png" alt="Silk" width="112"></p>
+
 # Silk
 
 > Silk was called PassVault. The rename is complete: crates, library, Android package and application ID (`app.silk`), classes, docs. Only the old `.pvlt` file format keeps its `PVLT` magic, because old vaults and backups must still open. **Because the application ID changed, Android treats Silk as a new app:** to bring an old PassVault vault over, back it up in the old app, install Silk and use **Restore from backup** on its first screen. Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

@@ -1,27 +1,44 @@
-// Silk UI. Verdigris (the green patina on old brass keys) as the accent;
-// brass appears only on the one-time-code countdown.
+// Silk UI. A soft grey, off-white palette: one neutral family, dark grey for primary actions and
+// no accent hues. Every color lives in `Theme` below and components only refer to it (the one
+// exception is the black tint of the two drop shadows).
 // Motion: screens cross-fade and rise into place, the tab bar slides, controls respond to
 // touch, banners expand, and the countdown bars glide.
 
 export struct Row { id: string, title: string, subtitle: string }
 export struct OtpRow { id: string, title: string, subtitle: string, code: string, left-text: string, progress: float }
 
+// Light is the specified palette. Dark (follows the system setting) is the same neutral family inverted.
 export global Theme {
     in property <bool> dark: false;
-    in-out property <color> bg: dark ? #0b1110 : #f1f5f4;
-    in-out property <color> surface: dark ? #172120 : #e4ebe9;
-    in-out property <color> raised: dark ? #1e2b29 : #dce5e2;
-    in-out property <color> card: dark ? #131c1b : #ffffff;
-    in-out property <color> fg: dark ? #e2eae7 : #121917;
-    in-out property <color> muted: dark ? #93a39f : #55645f;
-    in-out property <color> accent: dark ? #7bd3bf : #17695b;
-    in-out property <color> accent-soft: dark ? #16322d : #d6eee8;
-    in-out property <color> on-accent: dark ? #00382e : #ffffff;
-    in-out property <color> brass: dark ? #e3b866 : #8a5f12;
-    in-out property <color> danger: dark ? #ff8a80 : #b3261e;
-    in-out property <color> danger-soft: dark ? #3a1f1d : #fbe3e0;
-    in-out property <color> outline: dark ? #3a4a46 : #b6c4c0;
-    in-out property <color> scrim: dark ? #000000b8 : #0a14128f;
+    // Backgrounds: page, secondary fill (quiet buttons, disabled), white cards, a step above the page.
+    in-out property <color> bg: dark ? #1a1a19 : #f5f5f4;
+    in-out property <color> surface: dark ? #222221 : #eeeeec;
+    in-out property <color> card: dark ? #1f1f1e : #ffffff;
+    in-out property <color> elevated: dark ? #262625 : #fafaf9;
+    // Pressed and hover washes for rows and quiet controls.
+    in-out property <color> raised: dark ? #353534 : #dcdcdc;
+    in-out property <color> hover: dark ? #2e2e2d : #e5e5e5;
+    // Text: primary, secondary, muted (hints, disabled).
+    in-out property <color> fg: dark ? #e5e5e4 : #262626;
+    in-out property <color> muted: dark ? #a3a3a3 : #737373;
+    in-out property <color> faint: dark ? #737373 : #a3a3a3;
+    // Primary action: dark grey with white text (inverted in dark). Soft fill = the secondary button.
+    in-out property <color> accent: dark ? #e5e5e4 : #303030;
+    in-out property <color> on-accent: dark ? #1a1a19 : #ffffff;
+    in-out property <color> accent-soft: dark ? #2c2c2b : #eaeaea;
+    // The only hue left is a muted red, for errors and the low-time warning.
+    in-out property <color> danger: dark ? #e58a82 : #a63d36;
+    in-out property <color> danger-soft: dark ? #3a2523 : #f2e3e1;
+    // Borders: primary, secondary (under the tab bar), divider (inside a card), focus; the toggle/slider track.
+    in-out property <color> outline: dark ? #3a3a39 : #e5e5e5;
+    in-out property <color> outline-soft: dark ? #333332 : #ebebeb;
+    in-out property <color> divider: dark ? #2a2a29 : #f0f0f0;
+    in-out property <color> focus-border: dark ? #737373 : #a3a3a3;
+    in-out property <color> track: dark ? #454544 : #d4d4d4;
+    in-out property <color> scrim: dark ? #000000b8 : #2626268f;
+    // One corner radius for controls (buttons, fields, chips) and one for cards and dialogs.
+    out property <length> r-control: 10px;
+    out property <length> r-card: 14px;
 }
 
 // Line icons drawn as vector paths (no image files).
@@ -179,7 +196,7 @@ component SilkBanner inherits Rectangle {
     }
     height: root.wanted;
     clip: true;
-    border-radius: 14px;
+    border-radius: Theme.r-control;
     background: root.kept-error ? Theme.danger-soft : Theme.accent-soft;
     opacity: root.open ? 1.0 : 0.0;
     animate height { duration: 240ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -202,17 +219,17 @@ component SilkButton inherits Rectangle {
     in property <bool> busy: false;
     callback clicked();
     height: 54px;
-    border-radius: 16px;
+    border-radius: Theme.r-control;
     border-width: root.primary ? 0px : 1px;
     border-color: Theme.outline;
-    background: root.busy ? Theme.accent : !root.active ? Theme.surface : root.primary ? Theme.accent : Theme.card;
+    // Primary: dark grey. Secondary: light grey. Disabled: a flat, quiet grey with a faint label.
+    background: root.busy ? Theme.accent : !root.active ? Theme.surface : root.primary ? Theme.accent : Theme.accent-soft;
     animate background { duration: 160ms; easing: ease-out; }
-    opacity: (root.active || root.busy) ? 1.0 : 0.55;
-    animate opacity { duration: 160ms; easing: ease-out; }
+    // Hover and pressed are a light wash of the label color over the fill.
     Rectangle {
         border-radius: root.border-radius;
         background: root.primary ? Theme.on-accent : Theme.accent;
-        opacity: touch.pressed ? 0.16 : 0.0;
+        opacity: !root.active ? 0.0 : touch.pressed ? 0.16 : touch.has-hover ? 0.07 : 0.0;
         animate opacity { duration: touch.pressed ? 60ms : 240ms; easing: ease-out; }
     }
     touch := TouchArea {
@@ -225,9 +242,9 @@ component SilkButton inherits Rectangle {
         width: parent.width;
         height: parent.height;
         text: root.text;
-        color: root.primary ? Theme.on-accent : Theme.accent;
+        color: !root.active ? Theme.faint : root.primary ? Theme.on-accent : Theme.accent;
         font-size: 16px;
-        font-weight: 700;
+        font-weight: 500;
         horizontal-alignment: center;
         vertical-alignment: center;
         opacity: root.busy ? 0.0 : 1.0;
@@ -246,10 +263,10 @@ component SilkLink inherits Rectangle {
     in property <color> tint: Theme.accent;
     callback clicked();
     height: 44px;
-    border-radius: 12px;
+    border-radius: Theme.r-control;
     preferred-width: label.preferred-width + 16px;
     min-width: label.preferred-width + 16px;
-    background: touch.pressed ? Theme.surface : transparent;
+    background: touch.pressed ? Theme.raised : touch.has-hover ? Theme.hover : transparent;
     animate background { duration: 140ms; easing: ease-out; }
     touch := TouchArea { clicked => { root.clicked(); } }
     HorizontalLayout {
@@ -259,7 +276,7 @@ component SilkLink inherits Rectangle {
             text: root.text;
             color: root.tint;
             font-size: 15px;
-            font-weight: 600;
+            font-weight: 500;
             vertical-alignment: center;
         }
     }
@@ -276,11 +293,11 @@ component SilkPill inherits Rectangle {
     // Centers icon + label in the fixed width; the 2px shift offsets the icon's own empty margin.
     property <length> start: (root.w - root.icon-w - root.gap - lbl.preferred-width) / 2 - (root.icon >= 0 ? 2px : 0px);
     height: 40px;
-    border-radius: 20px;
+    border-radius: Theme.r-control;
     preferred-width: root.w;
     min-width: root.w;
     max-width: root.w;
-    background: touch.pressed ? Theme.accent : Theme.accent-soft;
+    background: touch.pressed ? Theme.raised : touch.has-hover ? Theme.hover : Theme.accent-soft;
     animate background { duration: 140ms; easing: ease-out; }
     touch := TouchArea { clicked => { root.clicked(); } }
     if root.icon >= 0 : SilkIcon {
@@ -289,7 +306,7 @@ component SilkPill inherits Rectangle {
         width: 20px;
         height: 20px;
         kind: root.icon;
-        tint: touch.pressed ? Theme.on-accent : Theme.accent;
+        tint: Theme.accent;
     }
     lbl := Text {
         x: root.start + root.icon-w + root.gap;
@@ -297,10 +314,9 @@ component SilkPill inherits Rectangle {
         height: parent.height;
         text: root.text;
         font-size: 15px;
-        font-weight: 700;
-        color: touch.pressed ? Theme.on-accent : Theme.accent;
+        font-weight: 500;
+        color: Theme.accent;
         vertical-alignment: center;
-        animate color { duration: 140ms; }
     }
 }
 
@@ -311,7 +327,7 @@ component SilkIconButton inherits Rectangle {
     width: 44px;
     height: 44px;
     border-radius: 22px;
-    background: touch.pressed ? Theme.accent-soft : transparent;
+    background: touch.pressed ? Theme.raised : touch.has-hover ? Theme.hover : transparent;
     animate background { duration: 140ms; easing: ease-out; }
     SilkIcon {
         x: (parent.width - self.width) / 2;
@@ -333,10 +349,10 @@ component SilkField inherits Rectangle {
     property <bool> lifted: ti.has-focus || ti.text != "";
     property <length> pad: root.icon >= 0 ? 46px : 14px;
     height: root.multiline ? 124px : 58px;
-    border-radius: 14px;
+    border-radius: Theme.r-control;
     border-width: ti.has-focus ? 2px : 1px;
-    border-color: ti.has-focus ? Theme.accent : Theme.outline;
-    background: ti.has-focus ? Theme.card : Theme.surface;
+    border-color: ti.has-focus ? Theme.focus-border : Theme.outline;
+    background: ti.has-focus ? Theme.card : Theme.elevated;
     animate border-color { duration: 180ms; easing: ease-out; }
     animate border-width { duration: 120ms; easing: ease-out; }
     animate background { duration: 180ms; easing: ease-out; }
@@ -375,7 +391,7 @@ component SilkField inherits Rectangle {
     }
 }
 
-// The one loud element: a big live code with a brass countdown. Tap to copy.
+// The one loud element: a big live code with a countdown bar. Tap to copy.
 component OtpCard inherits Rectangle {
     in property <string> code;
     in property <string> left-text;
@@ -386,7 +402,7 @@ component OtpCard inherits Rectangle {
     property <bool> low: root.progress < 0.18;
     property <float> pulse: 0.65 + 0.35 * Math.abs(Math.sin(animation-tick() / 1s * 3.1416 * 1rad));
     height: 132px;
-    border-radius: 20px;
+    border-radius: Theme.r-card;
     background: Theme.accent-soft;
     Timer {
         interval: 1300ms;
@@ -405,7 +421,7 @@ component OtpCard inherits Rectangle {
         y: 16px;
         text: root.code;
         font-size: 40px;
-        font-weight: 700;
+        font-weight: 600;
         color: root.low ? Theme.danger : Theme.accent;
         font-family: "monospace";
         opacity: root.low ? root.pulse : 1.0;
@@ -433,7 +449,7 @@ component OtpCard inherits Rectangle {
             width: parent.width * root.progress;
             height: parent.height;
             border-radius: 4px;
-            background: root.low ? Theme.danger : Theme.brass;
+            background: root.low ? Theme.danger : Theme.accent;
             animate width { duration: 1000ms; easing: linear; }
             animate background { duration: 300ms; }
         }
@@ -443,7 +459,7 @@ component OtpCard inherits Rectangle {
         y: 106px;
         text: !root.copyable ? "Live preview" : root.flashed ? "Copied to clipboard" : "Tap to copy";
         font-size: 13px;
-        font-weight: root.flashed ? 700 : 400;
+        font-weight: root.flashed ? 600 : 400;
         color: root.flashed ? Theme.accent : Theme.muted;
         animate color { duration: 200ms; }
     }
@@ -456,7 +472,7 @@ component SilkToggle inherits Rectangle {
     in-out property <bool> checked: false;
     callback toggled();
     height: root.hint == "" ? 56px : 68px;
-    border-radius: 14px;
+    border-radius: Theme.r-control;
     background: touch.pressed ? Theme.surface : transparent;
     animate background { duration: 140ms; easing: ease-out; }
     touch := TouchArea {
@@ -484,7 +500,7 @@ component SilkToggle inherits Rectangle {
                 width: 50px;
                 height: 30px;
                 border-radius: 15px;
-                background: root.checked ? Theme.accent : Theme.outline;
+                background: root.checked ? Theme.accent : Theme.track;
                 animate background { duration: 220ms; easing: ease-out; }
                 Rectangle {
                     property <length> d: touch.pressed ? 26px : (root.checked ? 22px : 18px);
@@ -521,7 +537,7 @@ component SilkSlider inherits Rectangle {
         width: parent.width - 28px;
         height: 6px;
         border-radius: 3px;
-        background: Theme.outline;
+        background: Theme.track;
     }
     Rectangle {
         x: 14px;
@@ -593,7 +609,7 @@ component CodeRow inherits Rectangle {
         y: 6px;
         width: parent.width - 28px;
         height: parent.height - 12px;
-        border-radius: 20px;
+        border-radius: Theme.r-card;
         background: copy-touch.pressed ? Theme.surface : Theme.card;
         border-width: 1px;
         border-color: Theme.outline;
@@ -628,7 +644,7 @@ component CodeRow inherits Rectangle {
             y: 54px;
             text: root.code;
             font-size: 34px;
-            font-weight: 700;
+            font-weight: 600;
             font-family: "monospace";
             color: root.low ? Theme.danger : Theme.accent;
             opacity: root.low ? root.pulse : 1.0;
@@ -640,7 +656,7 @@ component CodeRow inherits Rectangle {
             width: 80px;
             text: root.flashed ? "Copied" : root.left-text;
             font-size: 17px;
-            font-weight: root.flashed ? 700 : 400;
+            font-weight: root.flashed ? 600 : 400;
             color: root.flashed ? Theme.accent : root.low ? Theme.danger : Theme.fg;
             horizontal-alignment: right;
             animate color { duration: 200ms; }
@@ -656,7 +672,7 @@ component CodeRow inherits Rectangle {
                 width: parent.width * root.progress;
                 height: parent.height;
                 border-radius: 3px;
-                background: root.low ? Theme.danger : Theme.brass;
+                background: root.low ? Theme.danger : Theme.accent;
                 animate width { duration: 1000ms; easing: linear; }
                 animate background { duration: 300ms; }
             }
@@ -666,16 +682,16 @@ component CodeRow inherits Rectangle {
             y: 10px;
             width: 60px;
             height: 30px;
-            border-radius: 15px;
-            background: edit-touch.pressed ? Theme.accent : Theme.accent-soft;
+            border-radius: Theme.r-control;
+            background: edit-touch.pressed ? Theme.raised : Theme.accent-soft;
             animate background { duration: 140ms; }
             Text {
                 width: parent.width;
                 height: parent.height;
                 text: "Edit";
                 font-size: 14px;
-                font-weight: 700;
-                color: edit-touch.pressed ? Theme.on-accent : Theme.accent;
+                font-weight: 500;
+                color: Theme.accent;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -705,15 +721,14 @@ component TabBar inherits Rectangle {
         y: 0px;
         width: parent.width;
         height: 1px;
-        background: Theme.outline;
-        opacity: 0.7;
+        background: Theme.outline-soft;
     }
     Rectangle {
         x: root.current * (root.width / 4) + (root.width / 4 - 60px) / 2;
         y: 8px;
         width: 60px;
         height: 32px;
-        border-radius: 16px;
+        border-radius: Theme.r-control;
         background: Theme.accent-soft;
         animate x { duration: 320ms; easing: cubic-bezier(0.34, 1.3, 0.64, 1); }
     }
@@ -735,7 +750,7 @@ component TabBar inherits Rectangle {
             width: parent.width;
             text: label;
             font-size: 12px;
-            font-weight: i == root.current ? 700 : 500;
+            font-weight: i == root.current ? 600 : 500;
             color: i == root.current ? Theme.accent : Theme.muted;
             horizontal-alignment: center;
             animate color { duration: 200ms; }
@@ -746,7 +761,7 @@ component TabBar inherits Rectangle {
 
 component SectionLabel inherits Text {
     font-size: 12px;
-    font-weight: 700;
+    font-weight: 500;
     color: Theme.muted;
 }
 
@@ -760,8 +775,8 @@ component RowItem inherits Rectangle {
         y: 4px;
         width: parent.width - 28px;
         height: parent.height - 8px;
-        border-radius: 18px;
-        background: touch.pressed ? Theme.surface : Theme.card;
+        border-radius: Theme.r-card;
+        background: touch.pressed ? Theme.surface : touch.has-hover ? Theme.elevated : Theme.card;
         border-width: 1px;
         border-color: Theme.outline;
         animate background { duration: 140ms; easing: ease-out; }
@@ -771,7 +786,7 @@ component RowItem inherits Rectangle {
             y: (parent.height - self.height) / 2;
             width: 44px;
             height: 44px;
-            border-radius: 14px;
+            border-radius: Theme.r-control;
             background: Theme.accent-soft;
             SilkIcon {
                 x: 10px;
@@ -812,7 +827,7 @@ component SilkEmpty inherits Rectangle {
             Rectangle {
                 width: 84px;
                 height: 84px;
-                border-radius: 28px;
+                border-radius: Theme.r-card;
                 background: Theme.accent-soft;
                 SilkIcon {
                     x: 22px;
@@ -825,7 +840,7 @@ component SilkEmpty inherits Rectangle {
                 }
             }
         }
-        Text { text: root.title; font-size: 18px; font-weight: 700; color: Theme.fg; horizontal-alignment: center; wrap: word-wrap; }
+        Text { text: root.title; font-size: 18px; font-weight: 600; color: Theme.fg; horizontal-alignment: center; wrap: word-wrap; }
         Text { text: root.text; font-size: 14px; color: Theme.muted; horizontal-alignment: center; wrap: word-wrap; }
     }
 }
@@ -997,28 +1012,20 @@ export component MainWindow inherits Window {
                                 background: Theme.accent-soft;
                                 opacity: 0.6 + 0.3 * parent.breathe;
                             }
-                            Rectangle {
+                            // The official Silk icon (assets/silk-icon.png, resized to 256 px).
+                            Image {
                                 width: 80px;
                                 height: 80px;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
-                                border-radius: 26px;
-                                background: Theme.accent;
-                                SilkIcon {
-                                    x: 20px;
-                                    y: 20px;
-                                    width: 40px;
-                                    height: 40px;
-                                    kind: 6;
-                                    tint: Theme.on-accent;
-                                    thickness: 2.4px;
-                                }
+                                source: @image-url("silk-icon.png");
+                                image-fit: contain;
                             }
                         }
                         Text {
                             text: root.creating ? "Create your vault" : "Unlock vault";
                             font-size: 30px;
-                            font-weight: 800;
+                            font-weight: 600;
                             color: Theme.fg;
                             horizontal-alignment: center;
                         }
@@ -1083,7 +1090,7 @@ export component MainWindow inherits Window {
                         padding-left: 20px;
                         padding-right: 20px;
                         spacing: 2px;
-                        Text { text: "Logins"; font-size: 30px; font-weight: 800; color: Theme.fg; }
+                        Text { text: "Logins"; font-size: 30px; font-weight: 600; color: Theme.fg; }
                         Text { text: root.rows.length == 1 ? "1 login" : "\{root.rows.length} logins"; font-size: 14px; color: Theme.muted; }
                     }
                     if !root.autofill-on : VerticalLayout {
@@ -1092,7 +1099,7 @@ export component MainWindow inherits Window {
                         Rectangle {
                             height: 68px;
                             background: Theme.accent-soft;
-                            border-radius: 16px;
+                            border-radius: Theme.r-card;
                             HorizontalLayout {
                                 padding-left: 16px;
                                 padding-right: 6px;
@@ -1101,7 +1108,7 @@ export component MainWindow inherits Window {
                                     horizontal-stretch: 1;
                                     alignment: center;
                                     spacing: 2px;
-                                    Text { text: "Autofill is off"; font-size: 15px; font-weight: 700; color: Theme.fg; overflow: elide; }
+                                    Text { text: "Autofill is off"; font-size: 15px; font-weight: 500; color: Theme.fg; overflow: elide; }
                                     Text { text: "Turn it on to fill logins in other apps."; font-size: 12px; color: Theme.muted; overflow: elide; }
                                 }
                                 VerticalLayout { alignment: center; SilkLink { text: "Turn on"; clicked => { root.enable-autofill(); } } }
@@ -1150,13 +1157,13 @@ export component MainWindow inherits Window {
                             height: 56px;
                             x: parent.width - self.width - 18px;
                             y: parent.height - self.height - 18px;
-                            border-radius: 28px;
+                            border-radius: Theme.r-card;
                             background: Theme.accent;
-                            drop-shadow-blur: 16px;
-                            drop-shadow-color: #00000055;
-                            drop-shadow-offset-y: 5px;
+                            drop-shadow-blur: 12px;
+                            drop-shadow-color: #00000026;
+                            drop-shadow-offset-y: 3px;
                             Rectangle {
-                                border-radius: 28px;
+                                border-radius: Theme.r-card;
                                 background: Theme.on-accent;
                                 opacity: fab-touch.pressed ? 0.16 : 0.0;
                                 animate opacity { duration: 140ms; }
@@ -1169,7 +1176,7 @@ export component MainWindow inherits Window {
                                 height: parent.height;
                                 text: "Add login";
                                 font-size: 16px;
-                                font-weight: 700;
+                                font-weight: 500;
                                 color: Theme.on-accent;
                                 vertical-alignment: center;
                             }
@@ -1194,7 +1201,7 @@ export component MainWindow inherits Window {
                         padding-right: 8px;
                         spacing: 4px;
                         SilkLink { text: "Back"; clicked => { root.back(); } }
-                        Text { text: root.is-new ? "New login" : "Edit login"; font-size: 20px; font-weight: 700; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: root.is-new ? "New login" : "Edit login"; font-size: 20px; font-weight: 600; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
                         if !root.is-new : SilkLink { text: "Delete"; tint: Theme.danger; clicked => { root.delete-login(); } }
                     }
                     Flickable {
@@ -1262,7 +1269,7 @@ export component MainWindow inherits Window {
                             horizontal-stretch: 1;
                             alignment: center;
                             spacing: 2px;
-                            Text { text: "Codes"; font-size: 30px; font-weight: 800; color: Theme.fg; }
+                            Text { text: "Codes"; font-size: 30px; font-weight: 600; color: Theme.fg; }
                             Text { text: root.otp-rows.length == 1 ? "1 authenticator" : "\{root.otp-rows.length} authenticators"; font-size: 14px; color: Theme.muted; }
                         }
                         VerticalLayout { alignment: center; SilkPill { text: "Add"; icon: 4; clicked => { root.new-authenticator(); } } }
@@ -1326,15 +1333,15 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             padding-left: 2px;
                             spacing: 2px;
-                            Text { text: "Generator"; font-size: 30px; font-weight: 800; color: Theme.fg; }
+                            Text { text: "Generator"; font-size: 30px; font-weight: 600; color: Theme.fg; }
                             Text { text: "Strong, random passwords"; font-size: 14px; color: Theme.muted; }
                         }
                         Rectangle {
                             height: 152px;
-                            border-radius: 20px;
+                            border-radius: Theme.r-card;
                             background: Theme.accent-soft;
                             TouchArea { clicked => { root.gen-copy(); } }
-                            Text { x: 18px; y: 14px; text: "GENERATED PASSWORD"; font-size: 12px; font-weight: 700; color: Theme.muted; }
+                            Text { x: 18px; y: 14px; text: "GENERATED PASSWORD"; font-size: 12px; font-weight: 500; color: Theme.muted; }
                             Text {
                                 x: 18px;
                                 y: 38px;
@@ -1360,7 +1367,7 @@ export component MainWindow inherits Window {
                             padding-left: 4px;
                             padding-right: 4px;
                             Text { text: "Length"; font-size: 16px; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
-                            Text { text: "\{root.gen-length}"; font-size: 18px; font-weight: 700; color: Theme.accent; vertical-alignment: center; }
+                            Text { text: "\{root.gen-length}"; font-size: 18px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
                         }
                         HorizontalLayout {
                             spacing: 0px;
@@ -1392,7 +1399,7 @@ export component MainWindow inherits Window {
                         }
                         Rectangle {
                             height: 432px;
-                            border-radius: 20px;
+                            border-radius: Theme.r-card;
                             background: Theme.card;
                             border-width: 1px;
                             border-color: Theme.outline;
@@ -1400,15 +1407,15 @@ export component MainWindow inherits Window {
                                 padding: 6px;
                                 spacing: 0px;
                                 SilkToggle { label: "Lowercase"; hint: "a to z"; checked <=> root.gen-lower; toggled => { root.gen-changed(); } }
-                                Rectangle { height: 1px; background: Theme.outline; opacity: 0.5; }
+                                Rectangle { height: 1px; background: Theme.divider; }
                                 SilkToggle { label: "Uppercase"; hint: "A to Z"; checked <=> root.gen-upper; toggled => { root.gen-changed(); } }
-                                Rectangle { height: 1px; background: Theme.outline; opacity: 0.5; }
+                                Rectangle { height: 1px; background: Theme.divider; }
                                 SilkToggle { label: "Numbers"; hint: "0 to 9"; checked <=> root.gen-digits; toggled => { root.gen-changed(); } }
-                                Rectangle { height: 1px; background: Theme.outline; opacity: 0.5; }
+                                Rectangle { height: 1px; background: Theme.divider; }
                                 SilkToggle { label: "Symbols"; hint: "! @ # $ % ^ & * - _ = + ?"; checked <=> root.gen-symbols; toggled => { root.gen-changed(); } }
-                                Rectangle { height: 1px; background: Theme.outline; opacity: 0.5; }
+                                Rectangle { height: 1px; background: Theme.divider; }
                                 SilkToggle { label: "Avoid look-alikes"; hint: "Leaves out l I 1 O 0 o"; checked <=> root.gen-lookalikes; toggled => { root.gen-changed(); } }
-                                Rectangle { height: 1px; background: Theme.outline; opacity: 0.5; }
+                                Rectangle { height: 1px; background: Theme.divider; }
                                 SilkToggle { label: "Fill new logins automatically"; hint: "Start every new login with a generated password"; checked <=> root.auto-generate; toggled => { root.gen-changed(); } }
                             }
                         }
@@ -1432,13 +1439,13 @@ export component MainWindow inherits Window {
                         padding: 18px;
                         padding-top: 22px + root.safe-area-insets.top;
                         spacing: 12px;
-                        Text { text: "More"; font-size: 30px; font-weight: 800; color: Theme.fg; height: 40px; }
+                        Text { text: "More"; font-size: 30px; font-weight: 600; color: Theme.fg; height: 40px; }
                         more-banner := SilkBanner { error: root.error; notice: root.notice; }
 
                         SectionLabel { text: "AUTOFILL"; }
                         Rectangle {
                             height: 60px;
-                            border-radius: 16px;
+                            border-radius: Theme.r-card;
                             background: Theme.card;
                             border-width: 1px;
                             border-color: Theme.outline;
@@ -1485,7 +1492,7 @@ export component MainWindow inherits Window {
                         if root.cloud-linked : SilkButton { text: "Sign out"; clicked => { root.cloud-sign-out(); } }
                         if root.cloud-choice : Rectangle {
                             height: 280px;
-                            border-radius: 16px;
+                            border-radius: Theme.r-card;
                             background: Theme.danger-soft;
                             VerticalLayout {
                                 padding: 16px;
@@ -1514,7 +1521,7 @@ export component MainWindow inherits Window {
                         Rectangle {
                             height: root.export-ask != 0 ? 200px : 0px;
                             clip: true;
-                            border-radius: 16px;
+                            border-radius: Theme.r-card;
                             background: Theme.danger-soft;
                             opacity: root.export-ask != 0 ? 1.0 : 0.0;
                             animate height { duration: 260ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -1546,7 +1553,7 @@ export component MainWindow inherits Window {
                         if root.bio-available : SectionLabel { text: "SECURITY"; }
                         if root.bio-available : Rectangle {
                             height: 68px;
-                            border-radius: 16px;
+                            border-radius: Theme.r-card;
                             background: Theme.card;
                             border-width: 1px;
                             border-color: Theme.outline;
@@ -1584,7 +1591,7 @@ export component MainWindow inherits Window {
                         padding-right: 8px;
                         spacing: 4px;
                         SilkLink { text: "Back"; clicked => { root.back-codes(); } }
-                        Text { text: "Add authenticator"; font-size: 20px; font-weight: 700; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: "Add authenticator"; font-size: 20px; font-weight: 600; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
                     }
                     Flickable {
                         vertical-stretch: 1;
@@ -1642,7 +1649,7 @@ export component MainWindow inherits Window {
                         padding-right: 8px;
                         spacing: 4px;
                         SilkLink { text: "Back"; clicked => { root.go(5); } }
-                        Text { text: "Cloud account"; font-size: 20px; font-weight: 700; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: "Cloud account"; font-size: 20px; font-weight: 600; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
                     }
                     Flickable {
                         vertical-stretch: 1;
@@ -1706,18 +1713,18 @@ export component MainWindow inherits Window {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2 + (parent.open ? 0px : 30px);
             animate y { duration: 320ms; easing: cubic-bezier(0.34, 1.3, 0.64, 1); }
-            border-radius: 24px;
+            border-radius: Theme.r-card;
             background: Theme.card;
             border-width: 1px;
             border-color: Theme.outline;
-            drop-shadow-blur: 28px;
-            drop-shadow-color: #00000066;
-            drop-shadow-offset-y: 8px;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #0000002e;
+            drop-shadow-offset-y: 6px;
             TouchArea { }
             VerticalLayout {
                 padding: 20px;
                 spacing: 10px;
-                Text { text: "Replace this password?"; font-size: 19px; font-weight: 700; color: Theme.fg; wrap: word-wrap; }
+                Text { text: "Replace this password?"; font-size: 19px; font-weight: 600; color: Theme.fg; wrap: word-wrap; }
                 Text {
                     text: "This login already has a password. Generating a new one replaces the one shown here. If you save, the old one is gone.";
                     wrap: word-wrap;
