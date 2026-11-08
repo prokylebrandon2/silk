@@ -73,15 +73,25 @@ mod tests {
         let base = derive_key("password1", None, FAST, &salt).unwrap();
         assert_eq!(*base, *derive_key("password1", None, FAST, &salt).unwrap());
         assert_ne!(*base, *derive_key("password2", None, FAST, &salt).unwrap());
-        assert_ne!(*base, *derive_key("password1", Some(&[1u8; 8]), FAST, &salt).unwrap());
-        assert_ne!(*base, *derive_key("password1", None, FAST, &[6u8; 16]).unwrap());
+        assert_ne!(
+            *base,
+            *derive_key("password1", Some(&[1u8; 8]), FAST, &salt).unwrap()
+        );
+        assert_ne!(
+            *base,
+            *derive_key("password1", None, FAST, &[6u8; 16]).unwrap()
+        );
     }
 
     #[test]
     fn absurd_costs_are_not_sane() {
         assert!(Kdf::default().is_sane());
         assert!(!Kdf { t: 0, ..FAST }.is_sane());
-        assert!(!Kdf { mem_kib: u32::MAX, ..FAST }.is_sane());
+        assert!(!Kdf {
+            mem_kib: u32::MAX,
+            ..FAST
+        }
+        .is_sane());
         assert!(!Kdf { p: 17, ..FAST }.is_sane());
     }
 }

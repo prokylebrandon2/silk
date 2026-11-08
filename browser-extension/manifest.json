@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Silk",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Fill logins and one-time codes from your Silk backup. Works offline: nothing leaves your browser.",
   "action": {
     "default_title": "Silk",
