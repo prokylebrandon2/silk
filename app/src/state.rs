@@ -1,5 +1,5 @@
 //! Process-wide state shared by the UI thread and the JNI entry points (autofill runs on Java threads).
-use silk_core::firebase::{self, Auth};
+use silk_core::auth::Auth;
 use silk_core::supabase;
 use silk_core::session::{Outcome, Session};
 use silk_core::{autofill, sync, Error};
@@ -15,17 +15,10 @@ static CLOUD: Mutex<Cloud> = Mutex::new(Cloud {
     again: false,
 });
 
-/// Both cloud services' project values: Firebase signs the user in, Supabase stores the files.
-#[derive(Clone)]
-pub struct CloudConfig {
-    pub firebase: firebase::Config,
-    pub supabase: supabase::Config,
-}
-
 /// The cloud side of the process: project values, the signed-in account's tokens, and the
 /// "one sync at a time" latch. Network work runs on worker threads, never under the session lock.
 struct Cloud {
-    config: Option<CloudConfig>,
+    config: Option<supabase::Config>,
     auth: Option<Auth>,
     running: bool,
     /// Another push was asked for while one was running; one more run follows it.
@@ -97,12 +90,12 @@ fn cloud() -> MutexGuard<'static, Cloud> {
     CLOUD.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub fn set_cloud_config(config: Option<CloudConfig>) {
+pub fn set_cloud_config(config: Option<supabase::Config>) {
     cloud().config = config;
 }
 
 /// The project values, or `None` while any of them is still a placeholder.
-pub fn cloud_config() -> Option<CloudConfig> {
+pub fn cloud_config() -> Option<supabase::Config> {
     cloud().config.clone()
 }
 

@@ -11,7 +11,7 @@
 //! versions created) are *raw* key files: they are hashed whole, exactly as before, and nothing is
 //! ever written into them.
 //!
-//! The login is the Firebase account's email, user id and refresh token. The account password is
+//! The login is the cloud account's email, user id and refresh token. The account password is
 //! never stored. A damaged or missing login part is ignored: the secret, which is the part that
 //! matters, is always read from the fixed-size head. Later the whole file is meant to be sealed
 //! inside Kiln's `.skln`; that layer wraps these bytes as they are.
@@ -28,7 +28,7 @@ pub const HEAD_LEN: usize = 4 + 1 + SECRET_LEN;
 /// A login JSON larger than this is treated as damaged.
 const LOGIN_LIMIT: usize = 16 * 1024;
 
-/// The saved cloud sign-in. The refresh token lets the app get new Firebase access tokens without asking for the password.
+/// The saved cloud sign-in. The refresh token lets the app get new access tokens without asking for the password.
 #[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct Login {
     #[serde(default)]

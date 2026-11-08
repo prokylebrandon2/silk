@@ -28,6 +28,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Bloat check (see CLAUDE.md)
+        run: bash scripts/check-bloat.sh
       - name: Test the core crate
         run: cargo test -p silk-core
 
@@ -58,6 +60,11 @@ jobs:
     needs: core
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # Public client values (project URL and publishable key). local.properties does not exist in CI, so
+    # without these the APK is built with cloud sync switched off. Empty on fork PRs: sync stays off there.
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
     permissions:
       contents: write # lets tagged builds publish a GitHub Release
     steps:

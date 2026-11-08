@@ -4,13 +4,18 @@
 -- PART 2 changes the bucket and REPLACES the Storage policies that mention `silk-vaults`.
 -- This file has not been run against a live project by the author: read it before you run it.
 --
--- Files Silk stores, per user:   vaults/<firebase uid>/keyslot.skvk
---                                vaults/<firebase uid>/vault.interim   (vault.skln once Kiln's format exists)
+-- Files Silk stores, per user:   vaults/<user id>/keyslot.skvk
+--                                vaults/<user id>/vault.interim   (vault.skln once Kiln's format exists)
 -- Everything in them is already encrypted on the device.
 --
--- Requirement for ANY of this to work: Supabase sees a Firebase token as `anon` unless the token carries
--- the custom claim role = "authenticated". Until that is set up on the Firebase side, these policies
--- (which are for `authenticated`) will refuse every request. That is the safe failure.
+-- Users sign in with Supabase Auth (email and password, done by the app), so their token already has
+-- role = "authenticated" and sub = their user id. There is nothing else to set up: no third-party
+-- sign-in provider and no server-side code. Before sign-in the requests are `anon`, which these
+-- policies (written for `authenticated`) refuse.
+--
+-- Dashboard settings that matter (Authentication > Providers > Email): keep "Enable Email provider" on.
+-- Turn "Confirm email" off if you want sign-up to sign in at once; with it on, a new account must
+-- open the confirmation mail first and then use Sign in.
 
 -- ============================================================ PART 1: audit (read-only)
 
@@ -28,15 +33,14 @@ from pg_policies
 where schemaname = 'storage' and tablename = 'objects'
 order by cmd, policyname;
 
--- 1d. Firebase uids are text, not UUIDs. If `owner_id` is a uuid column, uploads can fail with
---     "invalid input syntax for type uuid". Expect data_type = text for owner_id.
+-- 1d. Storage records the uploader in `owner_id`. Expect data_type = text for owner_id.
 select column_name, data_type
 from information_schema.columns
 where table_schema = 'storage' and table_name = 'objects' and column_name in ('owner', 'owner_id');
 
 -- ============================================================ PART 2: harden (changes things)
 
--- 2a. Private bucket, 20 MB per file (the old Firebase rules had the same cap), raw bytes only.
+-- 2a. Private bucket, 20 MB per file, raw bytes only.
 update storage.buckets
 set public = false,
     file_size_limit = 20971520,
@@ -57,7 +61,7 @@ begin
 end $$;
 
 -- 2c. One policy per operation. A user may touch exactly vaults/<own uid>/<one of three file names>.
---     `auth.jwt() ->> 'sub'` is the Firebase uid. (auth.uid() can't be used: it expects a UUID.)
+--     `auth.jwt() ->> 'sub'` is the signed-in user's id (the same value as auth.uid(), as text).
 --     The array_length check refuses deeper folders such as vaults/<uid>/x/keyslot.skvk.
 create policy "silk: read own vault files" on storage.objects
   for select to authenticated
@@ -108,7 +112,7 @@ create policy "silk: delete own vault files" on storage.objects
 
 -- ============================================================ PART 3: check the policies (optional)
 -- Run each block on its own. Each one ends with ROLLBACK, so nothing is kept. They pretend to be a user
--- called `testuid`; they do not need the Firebase claim. Expected result is in the comment.
+-- called `testuid`. Expected result is in the comment.
 
 -- 3a. Own folder: should succeed.
 -- begin;
@@ -131,7 +135,7 @@ create policy "silk: delete own vault files" on storage.objects
 --   insert into storage.objects (bucket_id, name, owner_id) values ('silk-vaults', 'vaults/testuid/notes.txt', 'testuid');
 -- rollback;
 
--- 3d. Anonymous (what a Firebase token without the role claim becomes): should fail the same way.
+-- 3d. Anonymous (not signed in): should fail the same way.
 -- begin;
 --   set local role anon;
 --   insert into storage.objects (bucket_id, name) values ('silk-vaults', 'vaults/testuid/keyslot.skvk');

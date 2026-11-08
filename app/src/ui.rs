@@ -4,7 +4,7 @@
 use crate::bridge;
 use crate::state::{self, AuthHow, Event};
 use crate::{MainWindow, OtpRow, Row, Theme};
-use silk_core::{firebase, supabase};
+use silk_core::{auth, supabase};
 use silk_core::keyfile::{KeyFile, Login};
 use silk_core::otp::{self, OtpParams};
 use silk_core::session::{self, Outcome};
@@ -91,13 +91,10 @@ pub fn run(dir: PathBuf) {
         let mut c = ctl.borrow_mut();
         c.settings = Settings::load(&dir);
         c.dir = dir;
-        // Firebase and Supabase project values; None while any of them is still a placeholder.
-        state::set_cloud_config(bridge::cloud_config().and_then(|(fb_key, url, sb_key)| {
-            Some(state::CloudConfig {
-                firebase: firebase::Config::new(&fb_key)?,
-                supabase: supabase::Config::new(&url, &sb_key)?,
-            })
-        }));
+        // The Supabase project values; None while either of them is still a placeholder.
+        state::set_cloud_config(
+            bridge::cloud_config().and_then(|(url, key)| supabase::Config::new(&url, &key)),
+        );
         apply_settings(&ui, &c.settings);
         ui.set_otp_rows(ModelRc::from(c.code_model.clone()));
         c.creating = !state::session().exists();
@@ -602,15 +599,15 @@ fn run_sync(mode: sync::Mode) -> Result<sync::Report, Error> {
     let uid = auth.uid.clone();
     let store = state::session().store()?;
     let http = bridge::JavaHttp;
-    let remote = supabase::SupabaseStore::new(&http, cfg.supabase, cfg.firebase, auth)?;
+    let remote = supabase::SupabaseStore::new(&http, cfg, auth)?;
     let outcome = sync::run(&store, &remote, &uid, mode);
-    // The Firebase token may have been renewed on the way: keep the newest ones.
+    // The access token may have been renewed on the way: keep the newest ones.
     state::set_auth(Some(remote.auth()));
     outcome
 }
 
 /// Trades the refresh token saved in the key file for a fresh session. `force` also retries when a
-/// session exists. Returns false when there is nothing to resume (no saved sign-in, no Firebase
+/// session exists. Returns false when there is nothing to resume (no saved sign-in, no cloud
 /// config, or this is the autofill unlock screen, which never uses the network).
 fn start_resume(c: &mut Ctl, force: bool) -> bool {
     if c.auth_mode {
@@ -623,7 +620,7 @@ fn start_resume(c: &mut Ctl, force: bool) -> bool {
         return false; // already signed in as this account
     }
     std::thread::spawn(move || {
-        let result = firebase::refresh(&bridge::JavaHttp, &cfg.firebase, &login.email, &login.refresh_token);
+        let result = auth::refresh(&bridge::JavaHttp, &cfg, &login.email, &login.refresh_token);
         state::push(Event::CloudAuth {
             how: AuthHow::Resume,
             result,
@@ -639,7 +636,7 @@ fn start_account(ui: &MainWindow, c: &mut Ctl, sign_up: bool) {
     ui.set_notice("".into());
     let Some(cfg) = state::cloud_config() else {
         ui.set_error(
-            "Cloud sync isn't set up in this build. Fill in the Firebase and Supabase values first (see docs/ARCHITECTURE.md).".into(),
+            "Cloud sync isn't set up in this build. Fill in the Supabase values first (see docs/ARCHITECTURE.md).".into(),
         );
         return;
     };
@@ -656,9 +653,9 @@ fn start_account(ui: &MainWindow, c: &mut Ctl, sign_up: bool) {
     std::thread::spawn(move || {
         let http = bridge::JavaHttp;
         let result = if sign_up {
-            firebase::sign_up(&http, &cfg.firebase, &email, &password)
+            auth::sign_up(&http, &cfg, &email, &password)
         } else {
-            firebase::sign_in(&http, &cfg.firebase, &email, &password)
+            auth::sign_in(&http, &cfg, &email, &password)
         };
         password.zeroize();
         let how = if sign_up {
@@ -736,7 +733,7 @@ fn handle_cloud_auth(
     ui: &MainWindow,
     c: &mut Ctl,
     how: AuthHow,
-    result: Result<firebase::Auth, Error>,
+    result: Result<auth::Auth, Error>,
 ) {
     let explicit = std::mem::take(&mut c.explicit);
     match (how, result) {
@@ -772,7 +769,7 @@ fn handle_cloud_auth(
             );
         }
         (AuthHow::Resume, Err(e)) => {
-            // Offline or Firebase unreachable: stay quiet (unlocking works from the local copy) unless the user asked.
+            // Offline or Supabase unreachable: stay quiet (unlocking works from the local copy) unless the user asked.
             c.cloud_busy = false;
             if explicit {
                 ui.set_error(e.to_string().into());

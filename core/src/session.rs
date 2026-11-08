@@ -104,6 +104,7 @@ impl Session {
         self.store = Some(DirStore::new(dir));
     }
 
+    #[cfg(test)]
     pub fn set_idle_limit(&mut self, idle: Duration) {
         self.idle = idle;
     }

@@ -5,7 +5,7 @@ use crate::state::{self, Event};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::jint;
 use jni::{JNIEnv, JavaVM};
-use silk_core::firebase::{Http, HttpRequest, HttpResponse};
+use silk_core::auth::{Http, HttpRequest, HttpResponse};
 use silk_core::Error;
 use std::sync::Mutex;
 
@@ -101,10 +101,9 @@ pub fn save_key_file(data: &[u8]) {
     });
 }
 
-/// `(Firebase web api key, Supabase project URL, Supabase publishable key)`: the first from
-/// `res/values/firebase.xml`, the other two from `android/local.properties` or the environment
-/// (see `android/app/build.gradle.kts`).
-pub fn cloud_config() -> Option<(String, String, String)> {
+/// `(Supabase project URL, Supabase publishable key)`, from `android/local.properties` or the
+/// environment (see `android/app/build.gradle.kts`).
+pub fn cloud_config() -> Option<(String, String)> {
     let raw = with_env(|e, a| {
         let v = e
             .call_method(a, "cloudConfig", "()Ljava/lang/String;", &[])?
@@ -113,8 +112,8 @@ pub fn cloud_config() -> Option<(String, String, String)> {
         Ok(s)
     })?;
     let mut lines = raw.split('\n');
-    let (key, url, publishable) = (lines.next()?, lines.next()?, lines.next()?);
-    Some((key.to_owned(), url.to_owned(), publishable.to_owned()))
+    let (url, publishable) = (lines.next()?, lines.next()?);
+    Some((url.to_owned(), publishable.to_owned()))
 }
 
 /// The core's `Http` trait over `SilkActivity.http` (Java's `HttpURLConnection`). Blocking: call it from a worker thread.

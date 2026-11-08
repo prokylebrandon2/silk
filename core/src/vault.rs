@@ -165,17 +165,6 @@ impl Vault {
         Vault::decrypt(file, header, key)
     }
 
-    /// Opens with an already-derived key, skipping Argon2 (biometric unlock).
-    pub fn open_with_key(file: &[u8], key: &[u8; 32]) -> Result<Vault, Error> {
-        let header = Header::parse(file)?;
-        Vault::decrypt(file, header, Zeroizing::new(*key))
-    }
-
-    /// A copy of the vault key, wiped on drop. Treat it like the master password.
-    pub fn export_key(&self) -> Zeroizing<[u8; 32]> {
-        self.key.clone()
-    }
-
     fn decrypt(file: &[u8], header: Header, key: Zeroizing<[u8; 32]>) -> Result<Vault, Error> {
         // Header::parse already checked the length.
         let (aad, rest) = file.split_at(HEADER_LEN);
@@ -361,21 +350,6 @@ mod tests {
         let mut hdr = bytes.clone();
         hdr[9] ^= 1;
         assert!(Vault::open(&hdr, "correct horse", Some(&kf)).is_err());
-    }
-
-    #[test]
-    fn open_with_key_matches_password_open() {
-        let kf = [7u8; 64];
-        let mut v = Vault::create("password1", Some(&kf), FAST).unwrap();
-        v.upsert(entry("1", "GitHub"));
-        let bytes = v.seal().unwrap();
-        let key = v.export_key();
-        let back = Vault::open_with_key(&bytes, &key).unwrap();
-        assert_eq!(back.entries[0].title, "GitHub");
-        assert_eq!(
-            Vault::open_with_key(&bytes, &[0u8; 32]).err(),
-            Some(Error::WrongCredentials)
-        );
     }
 
     #[test]

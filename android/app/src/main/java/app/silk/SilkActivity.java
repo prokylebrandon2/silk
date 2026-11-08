@@ -299,20 +299,19 @@ public class SilkActivity extends NativeActivity {
         return last != null ? last : "key file";
     }
 
-    // ---- cloud (Firebase sign-in, Supabase storage): the protocol lives in Rust, Java only carries the HTTPS call ----
+    // ---- cloud (Supabase sign-in and storage): the protocol lives in Rust, Java only carries the HTTPS call ----
 
     /** One HTTPS request for Rust's cloud clients; see {@link Net} for the reply layout. Called on a worker thread. */
     public byte[] http(String method, String url, String headers, byte[] body) {
         return Net.request(method, url, headers, body, supabaseHost());
     }
 
-    /** The Firebase web API key, the Supabase project URL and the Supabase publishable key, one per line. */
+    /** The Supabase project URL and the Supabase publishable key, one per line. */
     public String cloudConfig() {
-        return getString(R.string.firebase_api_key) + "\n" + getString(R.string.supabase_url) + "\n"
-                + getString(R.string.supabase_publishable_key);
+        return getString(R.string.supabase_url) + "\n" + getString(R.string.supabase_publishable_key);
     }
 
-    /** The one host Net may reach besides Firebase sign-in: the configured Supabase project, or null. */
+    /** The one host Net may reach: the configured Supabase project, or null. */
     private String supabaseHost() {
         try {
             URL u = new URL(getString(R.string.supabase_url).trim());

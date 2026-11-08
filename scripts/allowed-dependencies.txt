@@ -1,0 +1,18 @@
+# Direct dependencies each crate may have. scripts/check-bloat.sh fails on anything not listed here.
+# To add one: put it on the line, say why in the comment below, and say so in the commit message.
+# Format:  <crate dir>: name name name ...      (names as written in that crate's Cargo.toml)
+
+# silk-core: crypto and parsing only. No network, no async, no HTTP client, no unsafe code.
+core: aes-gcm argon2 getrandom hmac serde serde_json sha1 sha2 zeroize
+#   aes-gcm, argon2, sha2, hmac, sha1  the vault, key slot and TOTP (RFC 6238 needs HMAC-SHA1/256/512)
+#   getrandom                          random bytes on Android and desktop alike
+#   serde, serde_json                  entries, settings, key-file login, Supabase replies
+#   zeroize                            wipe keys and passwords
+
+# silk (the Android library): UI and JNI.
+app: silk-core slint slint-build android-activity jni log android_logger zeroize
+#   slint, slint-build  the UI toolkit. Version and features decide the size of libsilk.so (the
+#                       Android backend of Slint 1.18 brings Skia in by itself). Measure before changing.
+#   jni                 Rust <-> Java glue
+#   log, android_logger logcat output and the panic hook (panic = "abort" in release)
+#   android-activity   Slint's Android backend needs exactly one activity flavour (native-activity).

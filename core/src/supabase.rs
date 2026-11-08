@@ -1,5 +1,5 @@
 //! Supabase Storage over HTTPS, as the core sees it: the two encrypted objects per user, behind the
-//! same one-method [`Http`] trait as the Firebase sign-in.
+//! same one-method [`Http`] trait as the sign-in (`auth`).
 //!
 //! ```text
 //! read    GET    <url>/storage/v1/object/authenticated/silk-vaults/vaults/<uid>/<file>
@@ -7,29 +7,21 @@
 //! replace PUT    <url>/storage/v1/object/silk-vaults/vaults/<uid>/<file>
 //! delete  DELETE <url>/storage/v1/object/silk-vaults/vaults/<uid>/<file>
 //!
-//! every call:  apikey: <publishable key>     Authorization: Bearer <Firebase id token>
+//! every call:  apikey: <publishable key>     Authorization: Bearer <Supabase access token>
 //! ```
 //!
-//! **Who the user is.** Supabase is set up to trust Firebase as a third-party login provider. It
-//! checks the Firebase id token itself; the storage policies then compare the token's `sub` (the
-//! Firebase uid) with the `<uid>` folder in the path. The path here is built from the signed-in
+//! **Who the user is.** The user signs in with Supabase Auth (`auth`), so the access token is
+//! Supabase's own (`role: authenticated`, `sub` = the user id). The storage policies compare the
+//! token's `sub` with the `<uid>` folder in the path. The path here is built from the signed-in
 //! account only, never from a uid handed in separately, and a token whose `sub` is not that uid is
 //! refused before anything is sent.
-//!
-//! **The `role` claim.** Supabase only treats a Firebase token as a signed-in user when it carries
-//! the custom claim `role: "authenticated"`. Without it every request runs as `anon`, and a policy
-//! meant for `authenticated` hides the objects: a read then looks exactly like "nothing stored
-//! yet", which is the signal that starts first-time setup. So this module reads the claim from the
-//! token (the signature is Supabase's job; this is only a local sanity check) and stops with a plain
-//! message instead of sending a request that can only be misread. Setting the claim is a separate,
-//! server-side step that is not part of the app.
 //!
 //! **Untrusted storage.** Everything stored is already ciphertext. Neither the master password nor
 //! any key ever reaches this module; it is handed the two finished byte buffers and nothing else.
 //!
-//! The Firebase id token and the Supabase key are never written into an [`Error`].
+//! The access token and the Supabase key are never written into an [`Error`].
 use crate::error::Error;
-use crate::firebase::{self, Account, Auth, Http, HttpRequest, HttpResponse};
+use crate::auth::{Account, Auth, Http, HttpRequest, HttpResponse};
 use crate::remote::{Object, RemoteStore};
 use serde::Deserialize;
 use serde_json::Value;
@@ -62,12 +54,18 @@ impl std::fmt::Debug for Config {
 
 impl Config {
     /// `None` when a value is empty, still a `YOUR_...` placeholder, or not what it should be:
-    /// - the URL must be exactly `https://<project-ref>.supabase.co` (it is put into every request,
-    ///   and the Java network layer only talks to this one host);
+    /// - the URL must be `https://<project-ref>.supabase.co` (it is put into every request, and the
+    ///   Java network layer only talks to this one host). The API addresses the dashboard shows next
+    ///   to it (`.../rest/v1`, `.../auth/v1`, `.../storage/v1`) are accepted and cut back to the
+    ///   project URL: pasting the wrong one of them is the easiest mistake to make here;
     /// - the key must not be a secret key. A `sb_secret_...` key or a legacy JWT key whose role is
     ///   not `anon` is refused, so a privileged key can't end up inside the app by mistake.
     pub fn new(url: &str, publishable_key: &str) -> Option<Config> {
         let url = url.trim().trim_end_matches('/');
+        let url = ["/rest/v1", "/auth/v1", "/storage/v1"]
+            .iter()
+            .find_map(|api| url.strip_suffix(api))
+            .unwrap_or(url);
         let key = publishable_key.trim();
         if url.starts_with("YOUR_") || key.starts_with("YOUR_") || key.is_empty() {
             return None;
@@ -97,16 +95,25 @@ impl Config {
         })
     }
 
-    /// The only host the app talks to for storage, for the network layer's allow-list.
+    /// The only host the app talks to, for the network layer's allow-list.
     pub fn host(&self) -> &str {
         self.base.strip_prefix("https://").unwrap_or(&self.base)
     }
+
+    /// `https://<project-ref>.supabase.co`, no trailing slash.
+    pub(crate) fn base(&self) -> &str {
+        &self.base
+    }
+
+    pub(crate) fn key(&self) -> &str {
+        &self.key
+    }
 }
 
-// ---- reading the token (never trusting it) ----
+// ---- reading tokens (never trusting them) ----
 
-/// The claims of a JWT, without checking its signature: that is Supabase's job. Used only to give a
-/// clear message before a request that is certain to fail.
+/// The claims of a JWT, without checking its signature: that is Supabase's job. Used to read the
+/// `role` of a legacy API key and the `sub` of an access token.
 fn jwt_claims(token: &str) -> Option<Value> {
     let mut parts = token.split('.');
     let (_header, payload, _sig) = (parts.next()?, parts.next()?, parts.next()?);
@@ -140,20 +147,14 @@ fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-const NO_ROLE: &str = "Cloud sync can't start yet: your Firebase sign-in is missing the \
-`role: authenticated` setting that Supabase needs. This is a one-time setup on the server side, not \
-something wrong with your account. Your vault stays on this device.";
-
-/// Refuses a token that Supabase would treat as anonymous, or that belongs to someone else.
+/// Refuses a token that is unreadable or that belongs to somebody else, before anything is sent.
+/// The signature is Supabase's job; this only keeps the path and the token from disagreeing.
 fn check_claims(token: &str, uid: &str) -> Result<(), Error> {
     let claims = jwt_claims(token).ok_or_else(|| {
-        Error::Account("Firebase gave a sign-in token that Silk can't read.".into())
+        Error::Account("Supabase gave a sign-in token that Silk can't read.".into())
     })?;
     if claims.get("sub").and_then(Value::as_str) != Some(uid) {
         return Err(Error::SignedOut);
-    }
-    if claims.get("role").and_then(Value::as_str) != Some("authenticated") {
-        return Err(Error::Account(NO_ROLE.into()));
     }
     Ok(())
 }
@@ -236,7 +237,7 @@ fn failure(reply: Reply) -> Error {
     match reply {
         Reply::TokenRejected => Error::SignedOut,
         Reply::Denied => Error::Remote(
-            "Supabase refused the request. Check the Storage policies and that this account's sign-in has the role setting."
+            "Supabase refused the request. Check that supabase/storage-policies.sql has been run on the project."
                 .into(),
         ),
         Reply::TooLarge => Error::Remote("The vault is larger than the cloud storage allows.".into()),
@@ -252,7 +253,7 @@ fn failure(reply: Reply) -> Error {
 
 // ---- the store ----
 
-/// The signed-in user's two objects in Supabase Storage, as a [`RemoteStore`]. Renews the Firebase id
+/// The signed-in user's two objects in Supabase Storage, as a [`RemoteStore`]. Renews the access
 /// token when it has run out (and once more if Supabase rejects it), so a long-lived store keeps working.
 pub struct SupabaseStore<'a> {
     http: &'a dyn Http,
@@ -265,17 +266,16 @@ pub struct SupabaseStore<'a> {
 }
 
 impl<'a> SupabaseStore<'a> {
-    /// Fails with `Error::Corrupt` when the uid isn't what Firebase hands out (it becomes part of the path).
+    /// Fails with `Error::Corrupt` when the uid isn't what Supabase hands out (it becomes part of the path).
     pub fn new(
         http: &'a dyn Http,
         cfg: Config,
-        firebase: firebase::Config,
         auth: Auth,
     ) -> Result<SupabaseStore<'a>, Error> {
         Ok(SupabaseStore {
             http,
+            account: Account::new(http, cfg.clone(), auth)?,
             cfg,
-            account: Account::new(http, firebase, auth)?,
             missing: Mutex::new(HashSet::new()),
         })
     }
@@ -427,11 +427,11 @@ impl RemoteStore for SupabaseStore<'_> {
 
 // The mocked tests below never reach a real Supabase project. They check the requests this module
 // builds and how it reacts to the answers Supabase is documented to give. Whether the live service
-// answers the same way is checked by `supabase/smoke-test.ps1`, which needs the role claim.
+// answers the same way is checked by `supabase/smoke-test.ps1`.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::firebase::unix_now;
+    use crate::auth::unix_now;
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, VecDeque};
 
@@ -468,23 +468,19 @@ mod tests {
         Config::new(URL, KEY).unwrap()
     }
 
-    fn fb_cfg() -> firebase::Config {
-        firebase::Config::new("AIzaTestKey_1").unwrap()
-    }
-
-    fn auth_with(id_token: &str, expires_at: u64) -> Auth {
+    fn auth_with(access_token: &str, expires_at: u64) -> Auth {
         Auth {
             email: "me@example.com".into(),
             uid: UID.into(),
-            id_token: id_token.into(),
+            access_token: access_token.into(),
             refresh_token: "rt1".into(),
             expires_at,
         }
     }
 
-    fn refresh_reply(id_token: &str) -> String {
+    fn refresh_reply(access_token: &str) -> String {
         format!(
-            r#"{{"id_token":"{id_token}","refresh_token":"rt2","expires_in":"3600","user_id":"{UID}"}}"#
+            r#"{{"access_token":"{access_token}","token_type":"bearer","expires_in":3600,"refresh_token":"rt2","user":{{"id":"{UID}","email":"me@example.com"}}}}"#
         )
     }
 
@@ -539,14 +535,8 @@ mod tests {
     const RLS: &str = r#"{"statusCode":"403","error":"Unauthorized","message":"new row violates row-level security policy"}"#;
     const EXPIRED: &str = r#"{"statusCode":"400","error":"InvalidJWT","message":"\"exp\" claim timestamp check failed"}"#;
 
-    fn store<'a>(http: &'a dyn Http, id_token: &str) -> SupabaseStore<'a> {
-        SupabaseStore::new(
-            http,
-            cfg(),
-            fb_cfg(),
-            auth_with(id_token, unix_now() + 3600),
-        )
-        .unwrap()
+    fn store<'a>(http: &'a dyn Http, access_token: &str) -> SupabaseStore<'a> {
+        SupabaseStore::new(http, cfg(), auth_with(access_token, unix_now() + 3600)).unwrap()
     }
 
     // ---- configuration ----
@@ -563,7 +553,8 @@ mod tests {
             "YOUR_SUPABASE_URL",
             "http://abc.supabase.co",
             "https://abc.example.com",
-            "https://abc.supabase.co/rest/v1",
+            "https://abc.supabase.co/rest/v2",
+            "https://abc.supabase.co/other/rest/v1x",
             "https://abc.supabase.co?x=1",
             "https://user@abc.supabase.co",
             "https://abc.supabase.co:8443",
@@ -576,6 +567,25 @@ mod tests {
         for bad in ["", "YOUR_SUPABASE_KEY", "key with space", "k&x=1"] {
             assert!(Config::new(URL, bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn an_api_address_pasted_for_the_project_url_is_cut_back_to_the_project_url() {
+        // The dashboard shows these next to the project URL; the first one is what ended up in a
+        // real configuration and silently kept cloud sync switched off.
+        for pasted in [
+            format!("{URL}/rest/v1/"),
+            format!("{URL}/rest/v1"),
+            format!("{URL}/auth/v1"),
+            format!(" {URL}/storage/v1/ "),
+        ] {
+            let c = Config::new(&pasted, KEY).unwrap_or_else(|| panic!("{pasted}"));
+            assert_eq!(c.base(), URL, "{pasted}");
+            assert_eq!(c.host(), "abcdefghijklmnopqrst.supabase.co");
+        }
+        // Still only a Supabase project host after the cut.
+        assert!(Config::new("https://evil.com/rest/v1", KEY).is_none());
+        assert!(Config::new("https://abc.example.com/auth/v1", KEY).is_none());
     }
 
     #[test]
@@ -611,7 +621,7 @@ mod tests {
             header(&seen[0], "Authorization"),
             Some(format!("Bearer {tok}").as_str())
         );
-        // No Firebase-style or other credentials, and nothing in the body.
+        // Nothing else is sent along, and nothing in the body.
         assert!(seen[0].body.is_empty());
     }
 
@@ -639,7 +649,7 @@ mod tests {
             let mut a = auth_with(&token("a"), unix_now() + 3600);
             a.uid = bad.into();
             assert!(
-                SupabaseStore::new(&http, cfg(), fb_cfg(), a).is_err(),
+                SupabaseStore::new(&http, cfg(), a).is_err(),
                 "{bad}"
             );
         }
@@ -650,17 +660,11 @@ mod tests {
         assert!(http.seen.borrow().is_empty());
     }
 
-    // ---- the role claim ----
-
     #[test]
-    fn a_token_without_the_role_claim_stops_before_any_request() {
+    fn a_token_that_cannot_be_read_stops_before_any_request() {
         let http = Script::new(vec![]);
-        for t in [
-            jwt(serde_json::json!({ "sub": UID })),
-            jwt(serde_json::json!({ "sub": UID, "role": "anon" })),
-            "not-a-jwt".to_string(),
-        ] {
-            let st = store(&http, &t);
+        for t in ["not-a-jwt", "a.b", "a.b.c.d", "a.%%%.c"] {
+            let st = store(&http, t);
             assert!(
                 matches!(st.get(Object::KeySlot), Err(Error::Account(_))),
                 "{t}"
@@ -672,11 +676,6 @@ mod tests {
             assert!(matches!(st.delete(Object::KeySlot), Err(Error::Account(_))));
         }
         assert!(http.seen.borrow().is_empty());
-        let msg = match store(&http, &jwt(serde_json::json!({ "sub": UID }))).get(Object::Archive) {
-            Err(Error::Account(m)) => m,
-            other => panic!("{other:?}"),
-        };
-        assert!(msg.contains("role: authenticated"));
     }
 
     // ---- reading answers ----
@@ -820,12 +819,13 @@ mod tests {
     fn an_expired_token_is_renewed_before_the_call_and_the_new_one_is_used() {
         let fresh = token("fresh");
         let http = Script::new(vec![s(200, &refresh_reply(&fresh)), s(200, "data")]);
-        let st = SupabaseStore::new(&http, cfg(), fb_cfg(), auth_with(&token("old"), 0)).unwrap();
+        let st = SupabaseStore::new(&http, cfg(), auth_with(&token("old"), 0)).unwrap();
         assert_eq!(st.get(Object::Archive).unwrap().unwrap(), b"data");
         let seen = http.seen.borrow();
-        assert!(seen[0]
-            .url
-            .starts_with("https://securetoken.googleapis.com/"));
+        assert_eq!(
+            seen[0].url,
+            format!("{URL}/auth/v1/token?grant_type=refresh_token")
+        );
         assert_eq!(
             header(&seen[1], "Authorization"),
             Some(format!("Bearer {fresh}").as_str())
@@ -855,10 +855,13 @@ mod tests {
         ]);
         let st = store(&http, &token("old"));
         assert_eq!(st.get(Object::Archive).err(), Some(Error::SignedOut));
-        // A refresh token Firebase no longer accepts: signed out as well.
+        // A refresh token Supabase no longer accepts: signed out as well.
         let http = Script::new(vec![
             s(401, "{}"),
-            s(400, r#"{"error":{"message":"TOKEN_EXPIRED"}}"#),
+            s(
+                400,
+                r#"{"code":400,"error_code":"refresh_token_not_found","msg":"Invalid Refresh Token: Refresh Token Not Found"}"#,
+            ),
         ]);
         let st = store(&http, &token("old"));
         assert_eq!(st.get(Object::Archive).err(), Some(Error::SignedOut));
@@ -894,7 +897,7 @@ mod tests {
 
     // ---- a whole sync against a pretend Supabase ----
 
-    /// Pretends to be Firebase's token endpoint and Supabase Storage with one in-memory bucket.
+    /// Pretends to be Supabase Storage with one in-memory bucket.
     struct World {
         objects: RefCell<HashMap<String, Vec<u8>>>,
         seen: RefCell<Vec<HttpRequest>>,
@@ -1136,18 +1139,29 @@ mod tests {
         }
 
         #[test]
-        fn a_token_without_the_role_claim_sends_nothing_and_changes_nothing() {
+        fn a_token_that_belongs_to_somebody_else_sends_nothing_and_changes_nothing() {
             let world = World::new(false);
             let a = device();
             let Unlocked { mut vault, .. } = session::unlock(&a, MASTER, None, FAST).unwrap();
             vault.upsert(login("Bank"));
             vault.save_remote(&a).unwrap();
-            let st = store(&world, &jwt(serde_json::json!({ "sub": UID })));
-            assert!(matches!(
-                sync::run(&a, &st, UID, Mode::Sync),
-                Err(Error::Account(_))
-            ));
+            let before = (
+                a.get(Object::KeySlot).unwrap(),
+                a.get(Object::Archive).unwrap(),
+            );
+            let st = store(&world, &jwt(serde_json::json!({ "sub": "someone-else" })));
+            assert_eq!(
+                sync::run(&a, &st, UID, Mode::Sync).err(),
+                Some(Error::SignedOut)
+            );
             assert!(world.seen.borrow().is_empty());
+            assert_eq!(
+                before,
+                (
+                    a.get(Object::KeySlot).unwrap(),
+                    a.get(Object::Archive).unwrap()
+                )
+            );
         }
     }
 }

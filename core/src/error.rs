@@ -13,9 +13,9 @@ pub enum Error {
     Io(String),
     /// An import file that can't be read. The message says what to do about it.
     Import(String),
-    /// The cloud copy (Firebase) couldn't be reached or refused the request.
+    /// The cloud copy (Supabase) couldn't be reached or refused the request.
     Remote(String),
-    /// Firebase refused the account itself (wrong email or password, weak password, ...). The message is shown as it is.
+    /// Supabase refused the account itself (wrong email or password, weak password, ...). The message is shown as it is.
     Account(String),
     /// The saved cloud sign-in is no longer accepted. The user has to sign in again.
     SignedOut,

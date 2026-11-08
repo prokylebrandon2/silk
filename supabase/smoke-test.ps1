@@ -1,12 +1,11 @@
 <#
 .SYNOPSIS
-  Checks the real Firebase -> Supabase Storage path with your own account. Run it from the repository root.
+  Checks the real Supabase Auth -> Supabase Storage path with your own account. Run it from the repository root.
 
 .DESCRIPTION
-  Reads SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY from android\local.properties and the Firebase Web API
-  key from android\app\src\main\res\values\firebase.xml. Asks for your Firebase email and password
-  (the password is typed hidden and goes only to Google's sign-in endpoint). Nothing is printed that
-  could be used to sign in: the token itself is never shown.
+  Reads SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY from android\local.properties. Asks for your Silk cloud
+  account email and password (the password is typed hidden and goes only to your Supabase project's
+  sign-in endpoint). Nothing is printed that could be used to sign in: the token itself is never shown.
 
   Default (read-only):
     1. signs in and shows what your token says about itself (role, uid, expiry);
@@ -15,9 +14,6 @@
     only if step 2 found nothing there, it creates a 32-byte random test object as keyslot.skvk, reads it
     back, replaces it, deletes it, and tries (and should fail) to write into someone else's folder.
     It refuses to run if you already have a vault in the cloud.
-
-  Until the `role: authenticated` claim exists on your Firebase user the token check will say so and the
-  script stops: that is the expected result before the claim is provisioned.
 
   This is a manual integration check, separate from the mocked Rust tests. It was written without
   access to a live project; if a line fails, send me the output (it contains no secrets).
@@ -33,9 +29,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = (Get-Location).Path
 $propsPath = Join-Path $root 'android\local.properties'
-$xmlPath = Join-Path $root 'android\app\src\main\res\values\firebase.xml'
 if (-not (Test-Path $propsPath)) { throw "Missing $propsPath (see docs/ARCHITECTURE.md, Setting up the cloud)." }
-if (-not (Test-Path $xmlPath)) { throw "Missing $xmlPath. Run this from the repository root." }
 
 function Get-Prop($name) {
     $line = Get-Content $propsPath | Where-Object { $_ -match "^\s*$name\s*=" } | Select-Object -First 1
@@ -43,15 +37,13 @@ function Get-Prop($name) {
     return ($line -replace "^\s*$name\s*=\s*", '').Trim()
 }
 
-$supabaseUrl = (Get-Prop 'SUPABASE_URL').TrimEnd('/')
+# The dashboard also shows the API addresses (.../rest/v1 and so on); the app accepts those, so do the same.
+$supabaseUrl = ((Get-Prop 'SUPABASE_URL').TrimEnd('/') -replace '/(rest|auth|storage)/v1$', '')
 $publishableKey = Get-Prop 'SUPABASE_PUBLISHABLE_KEY'
-$xml = Get-Content $xmlPath -Raw
-if ($xml -notmatch 'name="firebase_api_key"[^>]*>([^<]+)<') { throw 'firebase_api_key not found in firebase.xml' }
-$firebaseKey = $Matches[1].Trim()
 
 if ($supabaseUrl -notmatch '^https://[a-z0-9]+\.supabase\.co$') { throw 'SUPABASE_URL must look like https://<project>.supabase.co' }
 if ($publishableKey -like 'sb_secret_*') { throw 'That is a SECRET key. Use the publishable key, and rotate the secret key in the dashboard.' }
-if ($firebaseKey -like 'YOUR_*' -or $publishableKey -like 'YOUR_*') { throw 'A value is still a YOUR_ placeholder.' }
+if ($supabaseUrl -like 'YOUR_*' -or $publishableKey -like 'YOUR_*') { throw 'A value is still a YOUR_ placeholder.' }
 
 function Read-ErrorBody($err) {
     if ($err.ErrorDetails -and $err.ErrorDetails.Message) { return $err.ErrorDetails.Message }
@@ -85,28 +77,30 @@ function Decode-Jwt($jwt) {
 }
 
 # ---- 1. sign in ----
-$email = Read-Host 'Firebase account email'
-$secure = Read-Host 'Firebase account password' -AsSecureString
+$email = Read-Host 'Silk cloud account email'
+$secure = Read-Host 'Silk cloud account password' -AsSecureString
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-$signIn = Send 'POST' "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$firebaseKey" @{} `
-    (@{ email = $email; password = $plain; returnSecureToken = $true } | ConvertTo-Json) 'application/json'
+$signIn = Send 'POST' "$supabaseUrl/auth/v1/token?grant_type=password" @{ apikey = $publishableKey } `
+    (@{ email = $email; password = $plain } | ConvertTo-Json) 'application/json'
 $plain = $null
-if ($signIn.Status -ne 200) { throw "Firebase sign-in failed (HTTP $($signIn.Status)): $($signIn.Body)" }
-$idToken = ([Text.Encoding]::UTF8.GetString($signIn.Bytes) | ConvertFrom-Json).idToken
+if ($signIn.Status -ne 200) {
+    $why = if ($signIn.Body) { $signIn.Body } else { [Text.Encoding]::UTF8.GetString($signIn.Bytes) }
+    throw "Supabase sign-in failed (HTTP $($signIn.Status)): $why  (No account yet? Create one in the app first: More > Cloud sync > Create account.)"
+}
+$idToken = ([Text.Encoding]::UTF8.GetString($signIn.Bytes) | ConvertFrom-Json).access_token
 
 $claims = Decode-Jwt $idToken
 $uid = $claims.sub
 Write-Host ''
-Write-Host '== Your Firebase token says ==' -ForegroundColor Cyan
+Write-Host '== Your token says ==' -ForegroundColor Cyan
 Write-Host ("  uid (sub): {0}" -f $uid)
 Write-Host ("  role     : {0}" -f $(if ($claims.role) { $claims.role } else { '(none)' }))
 Write-Host ("  issuer   : {0}" -f $claims.iss)
 Write-Host ("  expires  : {0}" -f ([DateTimeOffset]::FromUnixTimeSeconds([long]$claims.exp).LocalDateTime))
 if ($claims.role -ne 'authenticated') {
     Write-Host ''
-    Write-Host 'The token has no role = "authenticated" claim, so Supabase treats it as anonymous and Storage' -ForegroundColor Yellow
-    Write-Host 'will refuse it. That is expected until the claim is provisioned. Stopping here.' -ForegroundColor Yellow
+    Write-Host 'The token is not role = "authenticated", so Storage will refuse it. Something is wrong with the sign-in. Stopping here.' -ForegroundColor Yellow
     return
 }
 

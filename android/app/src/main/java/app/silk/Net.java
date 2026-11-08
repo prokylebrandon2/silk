@@ -10,24 +10,18 @@ import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
 
 /**
- * The only network code in the app: one HTTPS request at a time for Rust's Firebase sign-in
- * (silk-core/src/firebase.rs) and Supabase Storage client (silk-core/src/supabase.rs). It holds no
+ * The only network code in the app: one HTTPS request at a time for Rust's Supabase Auth
+ * (silk-core/src/auth.rs) and Supabase Storage client (silk-core/src/supabase.rs). It holds no
  * logic. The URL, headers and body are built in Rust; this only refuses anything that isn't HTTPS to
- * the two Firebase sign-in hosts or the one Supabase project host from the app's configuration, so a
- * bug elsewhere can't turn it into a general-purpose downloader.
+ * the one Supabase project host from the app's configuration, so a bug elsewhere can't turn it into
+ * a general-purpose downloader.
  *
  * Reply: two bytes of HTTP status (big-endian), then the response body. Status 0 means no answer
  * at all, and the body is a short reason.
  */
 final class Net {
-    private static final Set<String> HOSTS = new HashSet<>(Arrays.asList(
-            "identitytoolkit.googleapis.com",
-            "securetoken.googleapis.com"));
     /** More than the 20 MB the storage rules allow, so a legitimate vault always fits. */
     private static final int LIMIT = 32_000_000;
 
@@ -35,13 +29,13 @@ final class Net {
 
     /**
      * @param headers "Name: value" lines separated by \n
-     * @param storageHost the Supabase project host from the configuration, or null when cloud sync isn't set up
+     * @param projectHost the Supabase project host from the configuration, or null when cloud sync isn't set up
      */
-    static byte[] request(String method, String url, String headers, byte[] body, String storageHost) {
+    static byte[] request(String method, String url, String headers, byte[] body, String projectHost) {
         HttpURLConnection c = null;
         try {
             URL u = new URL(url);
-            boolean hostOk = HOSTS.contains(u.getHost()) || (storageHost != null && storageHost.equals(u.getHost()));
+            boolean hostOk = projectHost != null && projectHost.equals(u.getHost());
             if (!"https".equals(u.getProtocol()) || !hostOk || u.getUserInfo() != null || u.getPort() != -1) {
                 return failure("blocked address");
             }

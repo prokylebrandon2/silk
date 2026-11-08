@@ -1,7 +1,7 @@
 //! The on-device copy of the two cloud objects, in the app's private folder.
 //!
 //! [`DirStore`] implements [`RemoteStore`], so the very same `CloudVault::unlock_remote` and
-//! `save_remote` flow that will talk to Firebase also runs against this folder. That gives offline
+//! `save_remote` flow that talks to the cloud also runs against this folder. That gives offline
 //! unlock for free: the cloud copy, once it exists, is synced into this folder and unlocking reads
 //! from here.
 //!

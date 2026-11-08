@@ -1,8 +1,0 @@
-<resources>
-    <!-- Firebase sign-in: Firebase console > Project settings > Web API key. It identifies the project
-         and is not a secret; the account decides who can sign in. The vault files are no longer stored
-         in Firebase: the Supabase URL and publishable key come from android/local.properties (see
-         app/build.gradle.kts). While any of the three is still a YOUR_ placeholder, the app shows
-         "Cloud sync isn't set up" and stays fully offline. Setup: docs/ARCHITECTURE.md. -->
-    <string name="firebase_api_key" translatable="false">AIzaSyCy0w6NibqnXGHSyGxtMgG3fAqsbxi_AG4</string>
-</resources>

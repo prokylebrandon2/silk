@@ -1,5 +1,5 @@
-//! Keeps the on-device copy (`local::DirStore`) and the cloud copy (any `RemoteStore`, Firebase
-//! in the app) in step. The device always unlocks from its own copy; this module moves the two
+//! Keeps the on-device copy (`local::DirStore`) and the cloud copy (any `RemoteStore`, Supabase
+//! Storage in the app) in step. The device always unlocks from its own copy; this module moves the two
 //! objects (key slot, vault file) between the two places.
 //!
 //! The rule is the authenticated **revision** inside the vault file: the higher one wins, and a

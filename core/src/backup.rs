@@ -16,11 +16,6 @@ const MAGIC: &[u8; 4] = b"SKBK";
 const VERSION: u8 = 1;
 const HEADER_LEN: usize = 5;
 
-/// True when `bytes` starts like a backup bundle (says nothing about the rest).
-pub fn is_bundle(bytes: &[u8]) -> bool {
-    bytes.len() > HEADER_LEN && &bytes[0..4] == MAGIC
-}
-
 /// Joins a key slot and a vault file. Both are checked first, so a bad pair can't be written.
 pub fn pack(keyslot: &[u8], vault_file: &[u8]) -> Result<Vec<u8>, Error> {
     KeySlot::from_bytes(keyslot)?;
@@ -73,14 +68,12 @@ mod tests {
     fn pack_then_unpack_gives_the_same_two_parts() {
         let (slot, file) = parts();
         let bundle = pack(&slot, &file).unwrap();
-        assert!(is_bundle(&bundle));
         assert_eq!(unpack(&bundle).unwrap(), (slot, file));
     }
 
     #[test]
     fn other_files_and_damaged_bundles_are_rejected() {
         let (slot, file) = parts();
-        assert!(!is_bundle(b"hello"));
         assert_eq!(unpack(b"hello").err(), Some(Error::NotAVault));
         assert_eq!(pack(b"short", &file).err(), Some(Error::NotAVault));
         assert_eq!(

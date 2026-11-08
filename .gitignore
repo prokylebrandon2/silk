@@ -9,3 +9,8 @@ android/local.properties
 *.keystore
 *.key
 .DS_Store
+*.apk
+*.aab
+*.so
+*.zip
+*.7z
