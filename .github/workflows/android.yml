@@ -30,9 +30,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Bloat check (see CLAUDE.md)
         run: bash scripts/check-bloat.sh
+      - name: Authenticate GitHub for private dependencies
+        env:
+          KILN_READ_TOKEN: ${{ secrets.KILN_READ_TOKEN }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${KILN_READ_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
       - name: Test the core crate
         run: cargo test -p silk-core
-
   # The Brave/Chrome extension: Argon2id against the RFC 9106 vectors, vault opening, TOTP vectors.
   extension:
     name: Browser extension
