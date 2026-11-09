@@ -147,6 +147,8 @@ Sign-in is Supabase Auth only. A third-party provider (Firebase was tried) needs
 - **Upload order** is key slot first, then vault file, so a half-finished first-time setup leaves a slot without a vault file (accepted as an empty vault), never a vault file nobody can open.
 - **Cloud sync is optional.** Without the Supabase values (`android/local.properties`) the app stays fully offline (it still declares `INTERNET`, but `Net.java` only accepts HTTPS to the one configured Supabase host, and nothing else).
 - **The sign-in in the key file is not encrypted yet** (see "The key file").
+- **The QR scanner needs Google Play services.** The Add authenticator screen scans with Google's code scanner (`SilkActivity.scanQr`): it has its own camera screen, so Silk holds no camera permission and no QR decoder, and the text of the code comes back through `Native.onScan`. Without Google Play services the scan reports a failure and the setup key can be typed.
+- **Back.** The phone's Back button (`SilkActivity.onBackPressed`, `Native.onBack`) steps back through the screens in the order they were opened: tabs along a trail kept in `Ctl::tabs`, and forms, the Add authenticator screen and the Cloud account screen to the screen they came from. From the first screen (the logins list, or the unlock screen) it leaves the app as before.
 
 ## Open work
 

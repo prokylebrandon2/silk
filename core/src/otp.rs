@@ -120,6 +120,32 @@ pub fn parse(input: &str) -> Option<OtpParams> {
     })
 }
 
+/// A name for the Add authenticator screen, read from an `otpauth://` link: its `issuer`, else the part of
+/// the label before the colon, else the whole label. `None` for anything else, or when the link names nothing.
+pub fn issuer(input: &str) -> Option<String> {
+    let s = input.trim();
+    if !s.to_ascii_lowercase().starts_with("otpauth://") {
+        return None;
+    }
+    let rest = &s["otpauth://".len()..];
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let from_query = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| pct_decode(k).eq_ignore_ascii_case("issuer"))
+        .map(|(_, v)| pct_decode(v));
+    let label = pct_decode(path.split_once('/').map_or("", |(_, l)| l));
+    let from_label = match label.split_once(':') {
+        Some((who, _)) => who.to_string(),
+        None => label.clone(),
+    };
+    [from_query, Some(from_label)]
+        .into_iter()
+        .flatten()
+        .map(|n| n.trim().to_string())
+        .find(|n| !n.is_empty())
+}
+
 macro_rules! hmac_tag {
     ($digest:ty, $key:expr, $msg:expr) => {{
         let mut m =
@@ -216,6 +242,33 @@ mod tests {
         assert_eq!((d.digits, d.period, d.algo), (6, 30, Algo::Sha1));
         assert!(parse("otpauth://totp/x?issuer=y").is_none());
         assert!(parse("   ").is_none());
+    }
+
+    #[test]
+    fn names_an_otpauth_link() {
+        let secret = "secret=JBSWY3DPEHPK3PXP";
+        let named = |link: String| issuer(&link);
+        assert_eq!(
+            named(format!(
+                "otpauth://totp/Acme%20Co:bob@x.com?{secret}&issuer=Other"
+            ))
+            .as_deref(),
+            Some("Other")
+        );
+        assert_eq!(
+            named(format!("otpauth://totp/Acme%20Co:bob@x.com?{secret}")).as_deref(),
+            Some("Acme Co")
+        );
+        assert_eq!(
+            named(format!("otpauth://totp/GitHub%3Abob?{secret}")).as_deref(),
+            Some("GitHub")
+        );
+        assert_eq!(
+            named(format!("otpauth://totp/bob@example.com?{secret}")).as_deref(),
+            Some("bob@example.com")
+        );
+        assert_eq!(named(format!("otpauth://totp/?{secret}")), None);
+        assert_eq!(named("JBSWY3DPEHPK3PXP".to_string()), None);
     }
 
     #[test]

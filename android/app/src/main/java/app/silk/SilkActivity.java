@@ -24,6 +24,10 @@ import android.view.autofill.AutofillId;
 import android.view.autofill.AutofillManager;
 import android.widget.Toast;
 
+import com.google.mlkit.vision.barcode.common.Barcode;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
+
 import java.io.ByteArrayOutputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -37,7 +41,8 @@ import java.util.concurrent.Executors;
 
 /**
  * NativeActivity plus the Android calls Rust can't make on its own: document picker results,
- * clipboard, autofill settings and returning an autofill result. Rust calls the public methods over JNI.
+ * clipboard, the QR scanner, the Back button, autofill settings and returning an autofill result.
+ * Rust calls the public methods over JNI.
  */
 public class SilkActivity extends NativeActivity {
     // Request codes, mirrored in app/src/ui.rs.
@@ -48,7 +53,7 @@ public class SilkActivity extends NativeActivity {
     static final int IMPORT_IN = 5;
     static final int EXPORT_CSV = 6;
     static final int EXPORT_JSON = 7;
-    // Status passed to Native.onFile.
+    // Status passed to Native.onFile and Native.onScan.
     static final int OK = 0;
     static final int CANCELLED = 1;
     static final int FAILED = 2;
@@ -149,6 +154,55 @@ public class SilkActivity extends NativeActivity {
         }
         pendingData = null;
         Native.onFile(code, status, name, out);
+    }
+
+    // ---- QR scanner ----
+
+    /**
+     * Opens Google's code scanner (Google Play services), which has its own camera screen, so Silk asks
+     * for no camera permission and never sees a camera frame. The answer goes to Native.onScan.
+     */
+    public void scanQr() {
+        runOnUiThread(() -> {
+            try {
+                GmsBarcodeScannerOptions options = new GmsBarcodeScannerOptions.Builder()
+                        .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                        .build();
+                GmsBarcodeScanning.getClient(this, options).startScan()
+                        .addOnSuccessListener(code -> {
+                            String text = code.getRawValue();
+                            Native.onScan(text == null ? FAILED : OK, text);
+                        })
+                        .addOnCanceledListener(() -> Native.onScan(CANCELLED, null))
+                        .addOnFailureListener(e -> Native.onScan(FAILED, null));
+            } catch (Throwable t) {
+                Native.onScan(FAILED, null); // no Google Play services on this phone
+            }
+        });
+    }
+
+    // ---- the phone's Back button ----
+
+    private boolean leaving;
+
+    /**
+     * Back goes to Rust first: it steps back through the screens the way the Back links do. Only from the
+     * first screen does Rust call {@link #exitApp()}, and then Back does what it always did.
+     */
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        if (leaving || !Native.onBack()) {
+            super.onBackPressed();
+        }
+    }
+
+    public void exitApp() {
+        runOnUiThread(() -> {
+            leaving = true;
+            onBackPressed();
+            leaving = false;
+        });
     }
 
     // ---- remembered key file (the location only; the file's bytes are never stored here) ----

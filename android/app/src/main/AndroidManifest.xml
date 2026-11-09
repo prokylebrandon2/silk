@@ -15,6 +15,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Silk">
 
+        <!-- Lets Google Play services fetch the QR scanner when the app is installed from Google Play;
+             from anywhere else it is fetched the first time the scanner opens. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
+
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|density|fontScale|navigation|layoutDirection|locale"

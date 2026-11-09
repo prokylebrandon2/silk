@@ -65,6 +65,12 @@ android {
     lint { checkReleaseBuilds = false; abortOnError = false }
 }
 
+dependencies {
+    // The QR scanner on the Add authenticator screen. Google's code scanner brings its own camera screen,
+    // so Silk needs no camera permission; it needs Google Play services on the phone.
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+}
+
 // The Rust library is built first by `cargo ndk` into src/main/jniLibs (see README and the workflow).
 tasks.register("checkNativeLibs") {
     doFirst {

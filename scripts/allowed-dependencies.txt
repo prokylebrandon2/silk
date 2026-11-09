@@ -19,3 +19,8 @@ app: silk-core slint slint-build android-activity jni log android_logger zeroize
 #   jni                 Rust <-> Java glue
 #   log, android_logger logcat output and the panic hook (panic = "abort" in release)
 #   android-activity   Slint's Android backend needs exactly one activity flavour (native-activity).
+
+# android (Gradle, android/app/build.gradle.kts): this script does not check it; listed so the list stays complete.
+#   play-services-code-scanner  the QR scanner on the Add authenticator screen. Google's own scanner screen,
+#                               so there is no camera permission and no QR decoder in Silk. Needs Google Play
+#                               services on the phone; typing the setup key still works without it.

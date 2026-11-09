@@ -53,6 +53,8 @@ pub enum Event {
         name: Option<String>,
         data: Option<Vec<u8>>,
     },
+    /// What the QR scanner brought back. `status`: 0 ok (`text` is the code's text), 1 cancelled, 2 failed.
+    Scan { status: i32, text: Option<String> },
     /// Result of the background unlock or create.
     Unlocked(Result<(), String>),
     /// Result of a biometric prompt. `op`: 1 enroll, 2 unlock. `status`: 0 ok, 1 cancelled, 2 failed, 3 invalidated.

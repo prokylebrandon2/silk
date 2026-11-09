@@ -1,9 +1,9 @@
-//! JNI in both directions. Java calls `Native.fill/onFile/lock` (exported below); Rust calls the public
-//! methods of `SilkActivity` on the running activity. Everything crossing the boundary is a string, int,
-//! boolean or byte array.
+//! JNI in both directions. Java calls `Native.fill/onFile/onScan/onBack/lock` (exported below); Rust calls the
+//! public methods of `SilkActivity` on the running activity. Everything crossing the boundary is a string,
+//! int, boolean or byte array.
 use crate::state::{self, Event};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::jint;
+use jni::sys::{jboolean, jint};
 use jni::{JNIEnv, JavaVM};
 use silk_core::auth::{Http, HttpRequest, HttpResponse};
 use silk_core::Error;
@@ -15,6 +15,14 @@ struct Bridge {
 }
 
 static BRIDGE: Mutex<Option<Bridge>> = Mutex::new(None);
+
+/// The window, for the phone's Back button: Java asks for it on its own thread and the step back
+/// runs on the UI thread (see `Java_app_silk_Native_onBack`).
+static WINDOW: Mutex<Option<slint::Weak<crate::MainWindow>>> = Mutex::new(None);
+
+pub fn register_window(window: slint::Weak<crate::MainWindow>) {
+    *WINDOW.lock().unwrap_or_else(|e| e.into_inner()) = Some(window);
+}
 
 pub fn init(app: &slint::android::AndroidApp) {
     // SAFETY: android-activity keeps both pointers valid for the life of the activity.
@@ -60,6 +68,16 @@ pub fn create_file(code: i32, name: &str, data: &[u8]) {
         )
         .map(|_| ())
     });
+}
+
+/// Opens the QR scanner. The answer comes back as `Event::Scan`.
+pub fn scan_qr() {
+    with_env(|e, a| e.call_method(a, "scanQr", "()V", &[]).map(|_| ()));
+}
+
+/// Back from the first screen: the activity leaves the way it did before Back stepped through screens.
+pub fn exit_app() {
+    with_env(|e, a| e.call_method(a, "exitApp", "()V", &[]).map(|_| ()));
 }
 
 pub fn copy(text: &str) {
@@ -287,6 +305,38 @@ pub extern "system" fn Java_app_silk_Native_onFile<'l>(
         name,
         data,
     });
+}
+
+#[no_mangle]
+pub extern "system" fn Java_app_silk_Native_onScan<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    status: jint,
+    text: JString<'l>,
+) {
+    let text = if text.as_raw().is_null() {
+        None
+    } else {
+        env.get_string(&text).ok().map(String::from)
+    };
+    state::push(Event::Scan { status, text });
+}
+
+/// The phone's Back button. Returns whether the UI took it: the step back (or the exit, from the first
+/// screen) then happens on the UI thread, which is where the screens live. `false` means there is no
+/// UI to ask, so Java does what Back always did.
+#[no_mangle]
+pub extern "system" fn Java_app_silk_Native_onBack<'l>(
+    _env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jboolean {
+    let window = WINDOW.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    match window {
+        Some(w) => w
+            .upgrade_in_event_loop(|ui| ui.invoke_system_back())
+            .is_ok() as jboolean,
+        None => 0,
+    }
 }
 
 #[no_mangle]

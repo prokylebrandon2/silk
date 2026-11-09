@@ -18,7 +18,7 @@ You can also enable optional cloud sync to keep your vault backed up across devi
 - **Strong encryption** — Your master password is stretched with Argon2id; the vault is encrypted with ChaCha20-Poly1305 and the key that protects it with AES-256-GCM.
 - **Optional key file** — Add another layer of protection using a file that only you have.
 - **Android autofill** — Fill usernames and passwords directly into supported apps and websites.
-- **Built-in authenticator** — Generate time-based one-time passwords (TOTP) without needing a separate authenticator app.
+- **Built-in authenticator** — Generate time-based one-time passwords (TOTP) without needing a separate authenticator app. Add one by scanning its QR code.
 - **Password generator** — Create strong, customizable passwords.
 - **Cloud sync** — Optionally synchronize your encrypted vault using Supabase.
 - **Proton Pass import and export** — Move your existing passwords between Silk and Proton Pass.
@@ -93,7 +93,9 @@ You can:
 - Select **Edit** to open its associated login.
 - Select **Add** to configure another authenticator.
 
-To add an authenticator, provide either a Base32 setup key or an `otpauth://` link. The authenticator is saved as its own entry.
+To add an authenticator, select **Scan QR code** and point the camera at the code the website shows, or type a Base32 setup key or an `otpauth://` link. A scan fills in the name from the code when you haven't typed one; check it, then save. The authenticator is saved as its own entry.
+
+The scanner is Google's code scanner, part of Google Play services: Silk asks for no camera permission and never sees the camera image. It needs an internet connection the first time it runs, and it isn't available on phones without Google Play services; typing the setup key works everywhere. Silk reads time-based codes only: a counter-based (HOTP) code, or the export code of Google Authenticator, is refused with a message.
 
 Silk supports:
 
@@ -517,7 +519,6 @@ git push --tags
 
 The following features are not implemented yet:
 
-- QR code scanning for authenticator setup.
 - HOTP support.
 - Passphrase generation.
 - Saving new logins directly from other apps.

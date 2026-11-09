@@ -25,6 +25,10 @@ const IMPORT_IN: i32 = 5;
 const EXPORT_CSV: i32 = 6;
 const EXPORT_JSON: i32 = 7;
 
+// Shared with SilkActivity.scanQr: the status of a scan. Anything else means it failed.
+const SCAN_OK: i32 = 0;
+const SCAN_CANCELLED: i32 = 1;
+
 // Shared with Bio.java.
 const BIO_ENROLL: i32 = 1;
 const BIO_UNLOCK: i32 = 2;
@@ -68,6 +72,9 @@ struct Ctl {
     explicit: bool,
     /// The Cloud account screen was opened from the lock screen (no vault open yet): it returns there.
     cloud_from_lock: bool,
+    /// The tabs (1 logins, 3 codes, 4 generator, 5 more) the user came through, oldest first, without the
+    /// one on screen. The phone's Back button walks back along it.
+    tabs: Vec<i32>,
 }
 
 type Shared = Rc<RefCell<Ctl>>;
@@ -115,6 +122,7 @@ pub fn run(dir: PathBuf) {
     ui.set_app_version(bridge::app_version().into());
     bridge::restore_key_file();
     wire(&ui, &ctl);
+    bridge::register_window(ui.as_weak());
     let timer = slint::Timer::default();
     start_timer(&timer, &ui, &ctl);
     ui.run().expect("run the UI");
@@ -243,9 +251,10 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         });
     }
     handler!(ui, ctl, on_back, |ui, c| {
-        c.editing = None;
-        c.otp = None;
-        leave_form(&ui, &mut c);
+        discard_form(&ui, &mut c);
+    });
+    handler!(ui, ctl, on_system_back, |ui, c| {
+        system_back(&ui, &mut c);
     });
     handler!(ui, ctl, on_save, |ui, c| {
         let entry = Entry {
@@ -318,24 +327,7 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         ui.on_go(move |screen| {
             let ui = weak.unwrap();
             let mut c = shared.borrow_mut();
-            state::touch();
-            ui.set_error("".into());
-            ui.set_notice("".into());
-            ui.set_export_ask(0);
-            if screen == 7 && c.auth_mode {
-                return; // the autofill unlock screen never uses the network
-            }
-            c.cloud_from_lock = screen == 7 && ui.get_screen() == 0;
-            match screen {
-                1 => refresh_rows(&ui, &ui.get_query()),
-                3 => refresh_codes(&mut c),
-                4 => show_preview(&ui, &c.settings.generator),
-                _ => {}
-            }
-            if screen == 7 {
-                update_cloud_ui(&ui, &c);
-            }
-            ui.set_screen(screen);
+            go(&ui, &mut c, screen);
         });
     }
 
@@ -364,10 +356,12 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         show_auth(&ui, &c);
     });
     handler!(ui, ctl, on_back_codes, |ui, c| {
-        clear_auth(&ui, &mut c);
-        refresh_codes(&mut c);
+        leave_authenticator(&ui, &mut c);
+    });
+    handler!(ui, ctl, on_scan_qr, |ui, _c| {
+        state::touch();
         ui.set_error("".into());
-        ui.set_screen(3);
+        bridge::scan_qr();
     });
     handler!(ui, ctl, on_save_authenticator, |ui, c| {
         let name = ui.get_a_name().trim().to_string();
@@ -959,6 +953,7 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
     match ev {
         Event::CloudAuth { how, result } => handle_cloud_auth(ui, c, how, result),
         Event::Synced { mode, result } => handle_synced(ui, c, mode, result),
+        Event::Scan { status, text } => handle_scan(ui, c, status, text),
         Event::Unlocked(Ok(())) => {
             ui.set_busy(false);
             ui.set_pw1("".into());
@@ -974,6 +969,7 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
                 ui.set_notice("".into());
                 ui.set_query("".into());
                 refresh_rows(ui, "");
+                c.tabs.clear(); // the logins list is the first screen: Back from here leaves the app
                 ui.set_screen(1);
                 if state::auth().is_none() {
                     // Offline at the lock screen, say: try the saved sign-in again now that the vault is open.
@@ -1103,6 +1099,7 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
 }
 
 fn lock_ui(ui: &MainWindow, c: &mut Ctl) {
+    c.tabs.clear();
     c.editing = None;
     c.otp = None;
     c.codes.clear();
@@ -1155,6 +1152,145 @@ fn refresh_rows(ui: &MainWindow, query: &str) {
         list
     };
     ui.set_rows(ModelRc::new(VecModel::from(rows)));
+}
+
+/// Moves to `screen` the way a tap on a tab or a link does.
+fn go(ui: &MainWindow, c: &mut Ctl, screen: i32) {
+    state::touch();
+    ui.set_error("".into());
+    ui.set_notice("".into());
+    ui.set_export_ask(0);
+    if screen == 7 && c.auth_mode {
+        return; // the autofill unlock screen never uses the network
+    }
+    track_tabs(c, ui.get_screen(), screen);
+    show(ui, c, screen);
+}
+
+/// Opens `screen` and prepares what it shows. It does not touch the tab trail: `go` records a move
+/// forward, and the phone's Back button takes one off the trail itself.
+fn show(ui: &MainWindow, c: &mut Ctl, screen: i32) {
+    c.cloud_from_lock = screen == 7 && ui.get_screen() == 0;
+    match screen {
+        1 => refresh_rows(ui, &ui.get_query()),
+        3 => refresh_codes(c),
+        4 => show_preview(ui, &c.settings.generator),
+        _ => {}
+    }
+    if screen == 7 {
+        update_cloud_ui(ui, c);
+    }
+    ui.set_screen(screen);
+}
+
+fn is_tab(screen: i32) -> bool {
+    matches!(screen, 1 | 3 | 4 | 5)
+}
+
+/// Remembers where a move from one tab to another came from. Going to a tab that is already on the
+/// trail cuts the trail back to it, so no tab is on it twice and it never grows past the four tabs.
+fn track_tabs(c: &mut Ctl, from: i32, to: i32) {
+    if from == to || !is_tab(from) || !is_tab(to) {
+        return;
+    }
+    match c.tabs.iter().position(|&t| t == to) {
+        Some(i) => c.tabs.truncate(i),
+        None => c.tabs.push(from),
+    }
+}
+
+/// The phone's Back button: one step back along the way the user came, the same as the Back link of the
+/// screen on top. From the first screen there is nothing to go back to, so the app is left, as before.
+fn system_back(ui: &MainWindow, c: &mut Ctl) {
+    state::touch();
+    // An open question comes first: Back answers it with "cancel".
+    if ui.get_confirm_gen() {
+        ui.set_confirm_gen(false);
+        return;
+    }
+    if ui.get_export_ask() != 0 {
+        ui.set_export_ask(0);
+        return;
+    }
+    ui.set_error("".into());
+    ui.set_notice("".into());
+    match ui.get_screen() {
+        2 => discard_form(ui, c),
+        6 => leave_authenticator(ui, c),
+        7 => {
+            let to = if c.cloud_from_lock { 0 } else { 5 };
+            show(ui, c, to);
+        }
+        1 | 3 | 4 | 5 => match c.tabs.pop() {
+            Some(tab) => show(ui, c, tab),
+            None => bridge::exit_app(),
+        },
+        _ => bridge::exit_app(),
+    }
+}
+
+/// Back without saving: drops what was typed and returns to the list the form was opened from.
+fn discard_form(ui: &MainWindow, c: &mut Ctl) {
+    c.editing = None;
+    c.otp = None;
+    leave_form(ui, c);
+}
+
+/// Back from the Add authenticator screen to the Codes list.
+fn leave_authenticator(ui: &MainWindow, c: &mut Ctl) {
+    clear_auth(ui, c);
+    refresh_codes(c);
+    ui.set_error("".into());
+    ui.set_screen(3);
+}
+
+/// What the QR scanner brought back. Only the Add authenticator screen starts a scan, so an answer that
+/// arrives anywhere else (the vault locked while the camera was open) is dropped.
+fn handle_scan(ui: &MainWindow, c: &mut Ctl, status: i32, text: Option<String>) {
+    if ui.get_screen() != 6 {
+        return;
+    }
+    state::touch();
+    match (status, text) {
+        (SCAN_CANCELLED, _) => {}
+        (SCAN_OK, Some(mut link)) => {
+            match scan_problem(&link) {
+                Some(msg) => ui.set_error(msg.into()),
+                None => {
+                    ui.set_error("".into());
+                    if ui.get_a_name().trim().is_empty() {
+                        if let Some(name) = otp::issuer(&link) {
+                            ui.set_a_name(name.into());
+                        }
+                    }
+                    // Setting the field from here doesn't count as typing, so read the secret as well.
+                    ui.set_a_secret(link.trim().into());
+                    c.auth_otp = otp::parse(&link);
+                    ui.set_a_invalid(false);
+                    show_auth(ui, c);
+                }
+            }
+            link.zeroize();
+        }
+        _ => ui.set_error(
+            "Couldn't scan. The scanner is part of Google Play services and needs an internet connection the first time. You can type the setup key instead."
+                .into(),
+        ),
+    }
+}
+
+/// Why a scanned QR code can't become an authenticator, or `None` when it can.
+fn scan_problem(link: &str) -> Option<&'static str> {
+    let lower = link.trim().to_ascii_lowercase();
+    if lower.starts_with("otpauth-migration://") {
+        Some("That is a Google Authenticator export code, which Silk can't read. Scan the QR code a website shows when you turn on two-factor authentication.")
+    } else if lower.starts_with("otpauth://hotp") {
+        Some("That code is counter-based (HOTP). Silk only supports time-based codes.")
+    } else if !lower.starts_with("otpauth://") || otp::parse(link).is_none() {
+        Some("That QR code isn't an authenticator setup code.")
+    } else {
+        None
+    }
 }
 
 fn load_form(ui: &MainWindow, c: &mut Ctl, entry: Option<Entry>) {

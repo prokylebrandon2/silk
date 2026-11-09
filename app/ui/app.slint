@@ -937,7 +937,10 @@ export component MainWindow inherits Window {
     callback delete-login();
     callback back();
     callback generate();
-    property <bool> confirm-gen: false;
+    callback scan-qr();
+    // The phone's Back button (not the Back links on screen): Rust steps back through the screens.
+    callback system-back();
+    in-out property <bool> confirm-gen: false;
     // Screens stay loaded and fade out, so hand keyboard focus to a hidden item on every change.
     changed screen => {
         root.confirm-gen = false;
@@ -962,12 +965,11 @@ export component MainWindow inherits Window {
 
     property <bool> show-tabs: root.screen == 1 || root.screen == 3 || root.screen == 4 || root.screen == 5;
     property <int> tab-index: root.screen == 1 ? 0 : root.screen == 3 ? 1 : root.screen == 4 ? 2 : 3;
-    // The scrolling forms are fixed-height columns inside a Flickable: grow them for the parts that come and go.
-    property <length> form-height: 700px + (root.otp-code != "" ? 140px : 0px) + (root.otp-invalid ? 46px : 0px) + (root.error != "" ? 64px : 0px);
-    property <length> auth-height: 560px + (root.a-code != "" ? 140px : 0px) + (root.a-invalid ? 46px : 0px) + (root.error != "" ? 64px : 0px);
-    property <length> gen-height: 868px + gen-banner.wanted;
-    property <length> more-height: 768px + (root.export-ask != 0 ? 200px : 0px) + (root.bio-available ? 80px : 0px) + more-banner.wanted + 170px + (root.cloud-linked ? 66px : 0px) + (root.cloud-choice ? 292px : 0px);
-    property <length> cloud-height: 560px + (root.error != "" ? 64px : 0px);
+    // The scrolling screens are columns inside a Flickable. The column is given more room than any screen
+    // can need and starts at the top; each Flickable's content-height is the real bottom of its last item
+    // (never less than the Flickable itself), so a screen that fits has nothing to scroll and one that
+    // doesn't stops exactly at its last item.
+    property <length> scroll-room: 4000px;
 
     // A fresh generated password flashes in.
     property <bool> preview-dim: false;
@@ -996,30 +998,22 @@ export component MainWindow inherits Window {
                 Flickable {
                     width: parent.width;
                     height: parent.height;
-                    content-height: max(root.height, 780px + (root.creating && root.cloud-configured ? 40px : 0px));
+                    content-height: max(self.height, lock-end.y + 10px);
                     VerticalLayout {
                         width: root.width;
-                        height: max(root.height, 780px + (root.creating && root.cloud-configured ? 40px : 0px));
+                        height: root.scroll-room;
                         alignment: start;
                         padding: 24px;
                         padding-top: 32px + root.safe-area-insets.top;
                         spacing: 14px;
                         Rectangle {
-                            height: 124px;
+                            height: 104px;
                             property <float> breathe: root.busy ? Math.sin(animation-tick() / 1s * 4.0 * 1rad) : 0.0;
-                            Rectangle {
-                                width: 112px + 10px * parent.breathe;
-                                height: self.width;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: self.width / 2;
-                                background: Theme.accent-soft;
-                                opacity: 0.6 + 0.3 * parent.breathe;
-                            }
-                            // The official Silk icon (assets/silk-icon.png, resized to 256 px).
+                            // The official Silk icon (assets/silk-icon.png, resized to 256 px). It is a square, so it
+                            // sits on the page by itself; while the vault opens it swells and settles.
                             Image {
-                                width: 80px;
-                                height: 80px;
+                                width: 80px + 8px * parent.breathe;
+                                height: self.width;
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
                                 source: @image-url("silk-icon.png");
@@ -1077,6 +1071,8 @@ export component MainWindow inherits Window {
                             active: !root.busy;
                             clicked => { root.bio-unlock(); }
                         }
+                        // Marks where the content ends: the scroll range stops here (spacing 14, bottom padding 24).
+                        lock-end := Rectangle { height: 0px; }
                     }
                 }
             }
@@ -1136,7 +1132,8 @@ export component MainWindow inherits Window {
                         Flickable {
                             width: parent.width;
                             height: parent.height;
-                            content-height: root.rows.length * 76px + 96px;
+                            // Extra room under the last row (so the Add login button never covers it) only once the list is long enough to reach that button.
+                            content-height: max(self.height, root.rows.length * 76px + (root.rows.length * 76px > self.height - 74px ? 96px : 0px));
                             VerticalLayout {
                                 width: root.width;
                                 height: root.rows.length * 76px;
@@ -1211,10 +1208,10 @@ export component MainWindow inherits Window {
                     }
                     Flickable {
                         vertical-stretch: 1;
-                        content-height: root.form-height;
+                        content-height: max(self.height, form-end.y + form-end.height + 16px);
                         VerticalLayout {
                             width: root.width;
-                            height: root.form-height;
+                            height: root.scroll-room;
                             alignment: start;
                             padding: 16px;
                             spacing: 10px;
@@ -1250,7 +1247,7 @@ export component MainWindow inherits Window {
                             }
                             SilkField { label: "Notes"; multiline: true; text <=> root.f-notes; edited => { root.activity(); } }
                             SilkBanner { error: root.error; notice: ""; }
-                            SilkButton { text: "Save login"; primary: true; active: root.f-title != ""; clicked => { root.save(); } }
+                            form-end := SilkButton { text: "Save login"; primary: true; active: root.f-title != ""; clicked => { root.save(); } }
                         }
                     }
                 }
@@ -1290,7 +1287,7 @@ export component MainWindow inherits Window {
                         Flickable {
                             width: parent.width;
                             height: parent.height;
-                            content-height: root.otp-rows.length * 132px + 24px;
+                            content-height: max(self.height, root.otp-rows.length * 132px + (root.otp-rows.length * 132px > self.height ? 24px : 0px));
                             VerticalLayout {
                                 width: root.width;
                                 height: root.otp-rows.length * 132px;
@@ -1327,10 +1324,10 @@ export component MainWindow inherits Window {
                 Flickable {
                     width: parent.width;
                     height: parent.height;
-                    content-height: root.gen-height + root.safe-area-insets.top;
+                    content-height: max(self.height, gen-end.y + gen-end.height + 18px);
                     VerticalLayout {
                         width: root.width;
-                        height: root.gen-height + root.safe-area-insets.top;
+                        height: root.scroll-room;
                         alignment: start;
                         padding: 18px;
                         padding-top: 22px + root.safe-area-insets.top;
@@ -1367,7 +1364,7 @@ export component MainWindow inherits Window {
                             SilkButton { text: "New password"; primary: true; clicked => { root.gen-regenerate(); } }
                             SilkButton { text: "Copy"; clicked => { root.gen-copy(); } }
                         }
-                        gen-banner := SilkBanner { error: root.error; notice: root.notice; }
+                        SilkBanner { error: root.error; notice: root.notice; }
                         HorizontalLayout {
                             padding-left: 4px;
                             padding-right: 4px;
@@ -1402,7 +1399,7 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
-                        Rectangle {
+                        gen-end := Rectangle {
                             height: 432px;
                             border-radius: Theme.r-card;
                             background: Theme.card;
@@ -1436,16 +1433,16 @@ export component MainWindow inherits Window {
                 Flickable {
                     width: parent.width;
                     height: parent.height;
-                    content-height: root.more-height + root.safe-area-insets.top;
+                    content-height: max(self.height, more-end.y + more-end.height + 18px);
                     VerticalLayout {
                         width: root.width;
-                        height: root.more-height + root.safe-area-insets.top;
+                        height: root.scroll-room;
                         alignment: start;
                         padding: 18px;
                         padding-top: 22px + root.safe-area-insets.top;
                         spacing: 12px;
                         Text { text: "More"; font-size: 30px; font-weight: 600; color: Theme.fg; height: 40px; }
-                        more-banner := SilkBanner { error: root.error; notice: root.notice; }
+                        SilkBanner { error: root.error; notice: root.notice; }
 
                         SectionLabel { text: "AUTOFILL"; }
                         Rectangle {
@@ -1592,7 +1589,7 @@ export component MainWindow inherits Window {
                         SectionLabel { text: "VAULT"; }
                         SilkButton { text: "Back up vault (encrypted)"; clicked => { root.backup(); } }
                         SilkButton { text: "Lock now"; clicked => { root.lock(); } }
-                        Text { text: root.app-version == "" ? "" : "Silk \{root.app-version}"; font-size: 12px; color: Theme.muted; horizontal-alignment: center; }
+                        more-end := Text { text: root.app-version == "" ? "" : "Silk \{root.app-version}"; font-size: 12px; color: Theme.muted; horizontal-alignment: center; }
                     }
                 }
             }
@@ -1616,18 +1613,23 @@ export component MainWindow inherits Window {
                     }
                     Flickable {
                         vertical-stretch: 1;
-                        content-height: root.auth-height;
+                        content-height: max(self.height, auth-end.y + auth-end.height + 16px);
                         VerticalLayout {
                             width: root.width;
-                            height: root.auth-height;
+                            height: root.scroll-room;
                             alignment: start;
                             padding: 16px;
                             spacing: 10px;
                             Text {
-                                text: "Paste the setup key or the otpauth:// link a website shows when you turn on two-factor authentication.";
+                                text: "Scan the QR code a website shows when you turn on two-factor authentication, or type the setup key or the otpauth:// link instead.";
                                 wrap: word-wrap;
                                 font-size: 14px;
                                 color: Theme.muted;
+                            }
+                            SilkButton {
+                                text: "Scan QR code";
+                                primary: root.a-code == "";
+                                clicked => { root.scan-qr(); }
                             }
                             SilkField { label: "Name (for example GitHub)"; text <=> root.a-name; edited => { root.activity(); } }
                             SilkField { label: "Setup key or otpauth:// link"; text <=> root.a-secret; edited => { root.activity(); root.auth-edited(); } }
@@ -1644,7 +1646,7 @@ export component MainWindow inherits Window {
                                 copyable: false;
                             }
                             SilkBanner { error: root.error; notice: ""; }
-                            SilkButton {
+                            auth-end := SilkButton {
                                 text: "Save authenticator";
                                 primary: true;
                                 active: root.a-name != "" && root.a-code != "";
@@ -1674,10 +1676,10 @@ export component MainWindow inherits Window {
                     }
                     Flickable {
                         vertical-stretch: 1;
-                        content-height: root.cloud-height;
+                        content-height: max(self.height, cloud-end.y + cloud-end.height + 16px);
                         VerticalLayout {
                             width: root.width;
-                            height: root.cloud-height;
+                            height: root.scroll-room;
                             alignment: start;
                             padding: 16px;
                             spacing: 10px;
@@ -1697,7 +1699,7 @@ export component MainWindow inherits Window {
                                 active: !root.cloud-busy && root.cloud-email != "" && root.cloud-pw != "";
                                 clicked => { root.cloud-sign-in(); }
                             }
-                            SilkButton {
+                            cloud-end := SilkButton {
                                 text: "Create account";
                                 active: !root.cloud-busy && root.cloud-email != "" && root.cloud-pw != "";
                                 clicked => { root.cloud-sign-up(); }
