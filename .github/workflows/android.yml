@@ -56,8 +56,12 @@ jobs:
         run: npm test
         working-directory: browser-extension
       - name: Package
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           cd browser-extension
+          sed -i "s|YOUR_SUPABASE_URL|${SUPABASE_URL}|; s|YOUR_SUPABASE_PUBLISHABLE_KEY|${SUPABASE_PUBLISHABLE_KEY}|" popup.js
           zip -r ../silk-extension.zip manifest.json background.js popup.html popup.css popup.js src icons
       - uses: actions/upload-artifact@v7
         with:
@@ -182,6 +186,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           cd browser-extension
           sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION%%-*}\"/" manifest.json
+          sed -i "s|YOUR_SUPABASE_URL|${SUPABASE_URL}|; s|YOUR_SUPABASE_PUBLISHABLE_KEY|${SUPABASE_PUBLISHABLE_KEY}|" popup.js
           zip -r "../silk-extension-${VERSION}.zip" manifest.json background.js popup.html popup.css popup.js src icons
 
       - uses: softprops/action-gh-release@v3

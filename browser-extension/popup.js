@@ -3,11 +3,16 @@ import { urlMatches, hostOf } from './src/match.js';
 import { silkFill } from './src/fill.js';
 import { toBase64, fromBase64, parseHeader, joinBackup, VaultError } from './src/vault.js';
 
+// Public client values (project URL and publishable key). CI replaces the two placeholders from the
+// repository secrets when it packages the extension; without them cloud sign-in is switched off.
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_PUBLISHABLE_KEY = 'YOUR_SUPABASE_PUBLISHABLE_KEY';
 const IDLE_MS = 5 * 60 * 1000; // same idle limit as the app
 const MAX_FILE = 8 * 1024 * 1024; // chrome.storage.local allows 10 MB
 
 const app = document.getElementById('app');
-const st = { vault: null, header: null, name: '', entries: null, tab: 'logins', query: '', page: null, msg: '', err: '', busy: false, keyFile: null, keyName: '', progress: 0, timer: null, view: '', cfg: null, email: '' };
+const CLOUD = cloudConfig(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+const st = { vault: null, header: null, name: '', entries: null, tab: 'logins', query: '', page: null, msg: '', err: '', busy: false, keyFile: null, keyName: '', progress: 0, timer: null, view: '', email: '' };
 
 // ------------------------------------------------------------------ small helpers
 
@@ -21,8 +26,7 @@ async function currentTab() {
 }
 
 async function loadState() {
-  const { vault, vaultName, cloud } = await chrome.storage.local.get(['vault', 'vaultName', 'cloud']);
-  st.cfg = cloud ? cloudConfig(cloud.url, cloud.key) : null;
+  const { vault, vaultName } = await chrome.storage.local.get(['vault', 'vaultName']);
   if (vault) {
     try {
       st.vault = fromBase64(vault);
@@ -91,29 +95,20 @@ function renderMessages() {
 
 function renderLogin() {
   const busy = st.busy ? 'disabled' : '';
-  app.innerHTML = `
-    <div class="brand"><img src="icons/48.png" alt=""><h1>Silk</h1></div>
-    <p>Sign in with your Silk cloud account to bring your vault to this browser. It stays encrypted; only your master password opens it.</p>
+  const signIn = `
+    <p>Sign in with your Silk account to bring your vault to this browser. It stays encrypted; only your master password opens it.</p>
     <input id="email" type="email" placeholder="Account email" autocomplete="username" spellcheck="false" value="${esc(st.email)}" ${busy}>
     <input id="acct" type="password" placeholder="Account password" autocomplete="current-password" ${busy}>
-    <button class="primary" id="signin" ${busy}>${st.busy ? 'Signing in…' : 'Sign in'}</button>
-    <details ${st.cfg ? '' : 'open'}>
-      <summary>Cloud project</summary>
-      <input id="url" type="text" placeholder="https://your-project.supabase.co" spellcheck="false" value="${esc(st.cfg ? st.cfg.url : '')}">
-      <input id="key" type="text" placeholder="Publishable key" spellcheck="false" value="${esc(st.cfg ? st.cfg.key : '')}">
-      <p class="muted">The same two values as in the app’s <code>local.properties</code>. Only the publishable key belongs here, never a secret key.</p>
-    </details>
+    <button class="primary" id="signin" ${busy}>${st.busy ? 'Signing in…' : 'Sign in'}</button>`;
+  app.innerHTML = `
+    <div class="brand"><img src="icons/48.png" alt=""><h1>Silk</h1></div>
+    ${CLOUD ? signIn : '<p>Cloud sign-in isn’t set up in this build. Add your vault from a backup file instead.</p>'}
     <div id="messages">${messages()}</div>
-    <div class="or">or</div>
+    ${CLOUD ? '<div class="or">or</div>' : ''}
     <input id="file" type="file" hidden>
-    <button id="pick">Choose a backup file</button>
+    <button id="pick" ${CLOUD ? '' : 'class="primary"'}>Choose a backup file</button>
     <p class="muted">In the Android app open <b>More</b> and tap <b>Back up vault</b>, move the <code>.silk</code> file to this computer, then choose it here.</p>
     ${st.vault ? '<div class="row"><button class="link small" id="back">Back to unlock</button></div>' : ''}`;
-  const email = $('#email');
-  const acct = $('#acct');
-  email.oninput = () => { st.email = email.value; };
-  email.onkeydown = acct.onkeydown = (e) => { if (e.key === 'Enter') signInCloud(); };
-  $('#signin').onclick = signInCloud;
   $('#pick').onclick = () => $('#file').click();
   $('#file').onchange = async (e) => {
     const f = e.target.files[0];
@@ -127,14 +122,19 @@ function renderLogin() {
       render();
     };
   }
+  if (!CLOUD) return;
+  const email = $('#email');
+  const acct = $('#acct');
+  email.oninput = () => { st.email = email.value; };
+  email.onkeydown = acct.onkeydown = (e) => { if (e.key === 'Enter') signInCloud(); };
+  $('#signin').onclick = signInCloud;
   (st.email ? acct : email).focus();
 }
 
 // ------------------------------------------------------------------ cloud sign-in
 // The same two steps as the app (core/src/auth.rs, core/src/supabase.rs): Supabase Auth signs in with
 // email and password, then the two encrypted files come from the user's folder in the private bucket.
-// Only the project values and the finished backup are kept; neither the account password nor the
-// session is stored. The content security policy lets this page talk to *.supabase.co and nothing else.
+// Only the finished backup is kept; neither the account password nor the session is stored. The content security policy lets this page talk to *.supabase.co and nothing else.
 
 const clean = (s) => String(s).replace(/[\x00-\x1f\x7f]/g, '').slice(0, 160);
 
@@ -234,14 +234,9 @@ async function signInCloud() {
   if (st.busy) return;
   const email = $('#email').value.trim();
   const password = $('#acct').value;
-  const cfg = cloudConfig($('#url').value, $('#key').value);
   st.email = email;
   st.err = '';
   st.msg = '';
-  if (!cfg) {
-    st.err = 'Enter the project URL (https://<project>.supabase.co) and its publishable key. A secret key is not accepted.';
-    return renderMessages();
-  }
   if (!email || !password) {
     st.err = 'Enter the account email and password.';
     return renderMessages();
@@ -251,10 +246,9 @@ async function signInCloud() {
   btn.disabled = true;
   btn.textContent = 'Signing in…';
   try {
-    const bytes = await downloadVault(cfg, email, password);
+    const bytes = await downloadVault(CLOUD, email, password);
     const name = `Cloud vault · ${email}`;
-    await chrome.storage.local.set({ cloud: cfg, vault: toBase64(bytes), vaultName: name });
-    st.cfg = cfg;
+    await chrome.storage.local.set({ vault: toBase64(bytes), vaultName: name });
     st.header = parseHeader(bytes);
     st.vault = bytes;
     st.name = name;

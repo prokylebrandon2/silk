@@ -333,10 +333,12 @@ Move the resulting `.silk` file to your computer.
 
 You can also extract the `silk-brave-extension` artifact from the GitHub Actions build and load that folder instead.
 
+Sign-in works in that packaged build: CI writes the `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` repository secrets into the two constants at the top of `popup.js`. In the plain `browser-extension/` folder they are placeholders, so only the backup file works (or put your own values in them, without committing them).
+
 **3. Unlock your vault**
 
 1. Click the Silk extension icon.
-2. Sign in with your cloud account (the first time, enter your Supabase project URL and publishable key, the same two values as in `android/local.properties`), or select your `.silk` backup.
+2. Sign in with your Silk account, or select your `.silk` backup.
 3. Enter your master password.
 4. Provide your key file if your vault requires one.
 
