@@ -968,7 +968,9 @@ export component MainWindow inherits Window {
     // The scrolling screens are columns inside a Flickable. The column is given more room than any screen
     // can need and starts at the top; each Flickable's content-height is the real bottom of its last item
     // (never less than the Flickable itself), so a screen that fits has nothing to scroll and one that
-    // doesn't stops exactly at its last item.
+    // doesn't stops exactly at its last item. Every such column sets `y: 0px`: an item without an explicit
+    // position is centered in its parent, so a column taller than the Flickable's content would be pushed
+    // off the top of the screen (a blank page), and a short list would float down the middle.
     property <length> scroll-room: 4000px;
 
     // A fresh generated password flashes in.
@@ -1000,6 +1002,7 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     content-height: max(self.height, lock-end.y + 10px);
                     VerticalLayout {
+                        y: 0px;
                         width: root.width;
                         height: root.scroll-room;
                         alignment: start;
@@ -1135,6 +1138,7 @@ export component MainWindow inherits Window {
                             // Extra room under the last row (so the Add login button never covers it) only once the list is long enough to reach that button.
                             content-height: max(self.height, root.rows.length * 76px + (root.rows.length * 76px > self.height - 74px ? 96px : 0px));
                             VerticalLayout {
+                                y: 0px;
                                 width: root.width;
                                 height: root.rows.length * 76px;
                                 alignment: start;
@@ -1210,6 +1214,7 @@ export component MainWindow inherits Window {
                         vertical-stretch: 1;
                         content-height: max(self.height, form-end.y + form-end.height + 16px);
                         VerticalLayout {
+                            y: 0px;
                             width: root.width;
                             height: root.scroll-room;
                             alignment: start;
@@ -1289,6 +1294,7 @@ export component MainWindow inherits Window {
                             height: parent.height;
                             content-height: max(self.height, root.otp-rows.length * 132px + (root.otp-rows.length * 132px > self.height ? 24px : 0px));
                             VerticalLayout {
+                                y: 0px;
                                 width: root.width;
                                 height: root.otp-rows.length * 132px;
                                 alignment: start;
@@ -1326,6 +1332,7 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     content-height: max(self.height, gen-end.y + gen-end.height + 18px);
                     VerticalLayout {
+                        y: 0px;
                         width: root.width;
                         height: root.scroll-room;
                         alignment: start;
@@ -1435,6 +1442,7 @@ export component MainWindow inherits Window {
                     height: parent.height;
                     content-height: max(self.height, more-end.y + more-end.height + 18px);
                     VerticalLayout {
+                        y: 0px;
                         width: root.width;
                         height: root.scroll-room;
                         alignment: start;
@@ -1615,6 +1623,7 @@ export component MainWindow inherits Window {
                         vertical-stretch: 1;
                         content-height: max(self.height, auth-end.y + auth-end.height + 16px);
                         VerticalLayout {
+                            y: 0px;
                             width: root.width;
                             height: root.scroll-room;
                             alignment: start;
@@ -1678,6 +1687,7 @@ export component MainWindow inherits Window {
                         vertical-stretch: 1;
                         content-height: max(self.height, cloud-end.y + cloud-end.height + 16px);
                         VerticalLayout {
+                            y: 0px;
                             width: root.width;
                             height: root.scroll-room;
                             alignment: start;
