@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Silk",
   "version": "1.0.0",
-  "description": "Fill logins and one-time codes from your Silk backup. Works offline: nothing leaves your browser.",
+  "description": "Fill logins and one-time codes from your Silk vault. Sign in once to download it, or add a backup file; unlocking and filling work offline.",
   "action": {
     "default_title": "Silk",
     "default_popup": "popup.html",
@@ -18,6 +18,6 @@
     }
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'none'; form-action 'none'"
+    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'none'; form-action 'none'; connect-src 'self' https://*.supabase.co"
   }
 }

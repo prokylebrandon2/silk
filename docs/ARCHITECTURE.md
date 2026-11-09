@@ -68,7 +68,7 @@ backup    "SKBK" | version u8 | key slot[91] | vault file (the rest)
 key file  "SKEY" | version u8 | secret[64] | login_len u32 | login JSON      (login part optional; see "The key file")
 ```
 
-The browser extension reads the backup (`browser-extension/src/vault.js`) and the `.skln` inside it (`src/skln.js`; `src/chacha.js` carries its own ChaCha20-Poly1305 because WebCrypto has none).
+The browser extension signs in to Supabase Auth like the app does, downloads the two cloud files and joins them into the same backup (`joinBackup` in `browser-extension/src/vault.js`); it also accepts a `.silk` file. It reads the backup (`browser-extension/src/vault.js`) and the `.skln` inside it (`src/skln.js`; `src/chacha.js` carries its own ChaCha20-Poly1305 because WebCrypto has none).
 
 Key derivation (`core/src/kdf.rs`): `SHA-256(password)`, mixed with `SHA-256(key file material)` when a key file is used, then Argon2id (t=3, 64 MiB, p=4 by default) to 32 bytes. The material of a Silk key file is its 64-byte secret; the material of any other file is the whole file.
 

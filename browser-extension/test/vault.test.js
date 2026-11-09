@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openVault, parseHeader } from '../src/vault.js';
+import { openVault, parseHeader, joinBackup } from '../src/vault.js';
 import { sealBundle } from './helpers.js';
 import { parseOtp, totpCode, secondsLeft, groupCode } from '../src/totp.js';
 import { urlMatches, hostOf } from '../src/match.js';
@@ -48,6 +48,17 @@ test('rejects a tampered or truncated Silk backup', async () => {
   const absurd = b.slice();
   new DataView(absurd.buffer).setUint32(5 + 10, 0xffffffff);
   assert.throws(() => parseHeader(absurd), { code: 'corrupt' });
+});
+
+test('joins the two cloud files into the backup the app writes', async () => {
+  const b = await sealBundle([entry], 'password1', null);
+  const slot = b.slice(5, 5 + 91);
+  const vault = b.slice(5 + 91);
+  const joined = joinBackup(slot, vault);
+  assert.deepEqual(Array.from(joined), Array.from(b));
+  assert.equal((await openVault(joined, 'password1', null)).length, 1);
+  assert.throws(() => joinBackup(slot.slice(0, 90), vault), { code: 'not-a-vault' });
+  assert.throws(() => joinBackup(vault, slot), { code: 'not-a-vault' });
 });
 
 test('opens a .skln vault that spans many records', async () => {

@@ -307,6 +307,7 @@ The extension lets you use a **read-only copy** of your phone's vault on your co
 
 It can:
 
+- Sign in with your Silk cloud account to download your vault, or load a backup file instead.
 - Suggest logins for the website you're visiting.
 - Fill usernames and passwords when you select **Fill**.
 - Fill or copy one-time authentication codes.
@@ -315,7 +316,7 @@ It can:
 
 ### Installing the extension
 
-**1. Create a vault backup**
+**1. Create a vault backup** (only if you load a file; signing in with your cloud account needs no backup)
 
 On your phone, open Silk and select:
 
@@ -335,7 +336,7 @@ You can also extract the `silk-brave-extension` artifact from the GitHub Actions
 **3. Unlock your vault**
 
 1. Click the Silk extension icon.
-2. Select your `.silk` backup.
+2. Sign in with your cloud account (the first time, enter your Supabase project URL and publishable key, the same two values as in `android/local.properties`), or select your `.silk` backup.
 3. Enter your master password.
 4. Provide your key file if your vault requires one.
 
@@ -351,6 +352,8 @@ The extension only requests these permissions:
 - `scripting`
 
 It can interact with a webpage only when you click **Fill**.
+
+Signing in sends your account email and password to your own Supabase project, downloads the two encrypted vault files, and stores only the finished backup, never the account password or the session. The extension's content security policy lets it talk to `*.supabase.co` and nothing else.
 
 The encrypted backup is kept in extension-local storage. Decrypted login data stays in session storage, which the browser does not write to disk.
 

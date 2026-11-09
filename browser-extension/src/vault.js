@@ -136,3 +136,14 @@ export function toBase64(bytes) {
 }
 
 export const fromBase64 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+
+/** Joins the two files kept in the cloud (key slot, vault file) into a backup: the bytes the app's Back up vault writes. */
+export function joinBackup(slot, vault) {
+  if (slot.length !== SLOT_LEN) throw new VaultError('not-a-vault', "This isn't a Silk file.");
+  const out = new Uint8Array(BUNDLE_HEADER + SLOT_LEN + vault.length);
+  out.set([...MAGIC_BUNDLE, 1], 0);
+  out.set(slot, BUNDLE_HEADER);
+  out.set(vault, BUNDLE_HEADER + SLOT_LEN);
+  parseHeader(out); // throws if either part is not what it should be
+  return out;
+}
