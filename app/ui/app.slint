@@ -4,7 +4,7 @@
 // Motion: screens cross-fade and rise into place, the tab bar slides, controls respond to
 // touch, banners expand, and the countdown bars glide.
 
-export struct Row { id: string, title: string, subtitle: string }
+export struct Row { id: string, title: string, subtitle: string, letter: string }
 export struct OtpRow { id: string, title: string, subtitle: string, code: string, left-text: string, progress: float }
 
 // Light is the specified palette. Dark (follows the system setting) is the same neutral family inverted.
@@ -42,7 +42,7 @@ export global Theme {
 }
 
 // Line icons drawn as vector paths (no image files).
-// 0 key, 1 clock, 2 sliders, 3 menu, 4 plus, 5 search, 6 shield, 7 chevron, 8 minus
+// 0 key, 1 clock, 2 sliders, 3 menu, 4 plus, 5 search, 6 shield, 8 minus
 component SilkIcon inherits Rectangle {
     in property <int> kind: 0;
     in-out property <color> tint: Theme.fg;
@@ -122,17 +122,6 @@ component SilkIcon inherits Rectangle {
         viewbox-width: 24;
         viewbox-height: 24;
         commands: "M12 3 L19 6 L19 12 C19 16.5 16 19.8 12 21 C8 19.8 5 16.5 5 12 L5 6 Z M9 12 L11 14 L15 10";
-        stroke: root.tint;
-        stroke-width: root.thickness;
-        stroke-line-cap: round;
-        stroke-line-join: round;
-    }
-    if root.kind == 7 : Path {
-        width: parent.width;
-        height: parent.height;
-        viewbox-width: 24;
-        viewbox-height: 24;
-        commands: "M9 6 L15 12 L9 18";
         stroke: root.tint;
         stroke-width: root.thickness;
         stroke-line-cap: round;
@@ -760,57 +749,81 @@ component TabBar inherits Rectangle {
 }
 
 component SectionLabel inherits Text {
-    font-size: 12px;
-    font-weight: 500;
-    color: Theme.muted;
+    height: 40px;
+    font-size: 14px;
+    font-weight: 600;
+    color: Theme.fg;
+    vertical-alignment: bottom;
+}
+
+// A tappable settings row: title, optional hint line. Quieter than a button.
+component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> hint: "";
+    callback clicked();
+    height: root.hint == "" ? 56px : 66px;
+    border-radius: Theme.r-card;
+    border-width: 1px;
+    border-color: Theme.outline;
+    background: touch.pressed ? Theme.surface : touch.has-hover ? Theme.elevated : Theme.card;
+    animate background { duration: 140ms; easing: ease-out; }
+    touch := TouchArea { clicked => { root.clicked(); } }
+    VerticalLayout {
+        x: 16px;
+        y: 0px;
+        width: parent.width - 32px;
+        height: parent.height;
+        alignment: center;
+        spacing: 2px;
+        Text { text: root.title; font-size: 16px; font-weight: 500; color: Theme.fg; overflow: elide; }
+        if root.hint != "" : Text { text: root.hint; font-size: 13px; color: Theme.muted; overflow: elide; }
+    }
 }
 
 component RowItem inherits Rectangle {
     in property <string> title;
     in property <string> subtitle;
+    in property <string> letter;
+    in property <bool> last: false;
     callback clicked();
-    height: 76px;
+    height: 68px;
+    background: touch.pressed ? Theme.surface : touch.has-hover ? Theme.elevated : transparent;
+    animate background { duration: 140ms; easing: ease-out; }
+    touch := TouchArea { clicked => { root.clicked(); } }
     Rectangle {
-        x: 14px;
-        y: 4px;
-        width: parent.width - 28px;
-        height: parent.height - 8px;
-        border-radius: Theme.r-card;
-        background: touch.pressed ? Theme.surface : touch.has-hover ? Theme.elevated : Theme.card;
-        border-width: 1px;
-        border-color: Theme.outline;
-        animate background { duration: 140ms; easing: ease-out; }
-        touch := TouchArea { clicked => { root.clicked(); } }
-        Rectangle {
-            x: 12px;
-            y: (parent.height - self.height) / 2;
-            width: 44px;
-            height: 44px;
-            border-radius: Theme.r-control;
-            background: Theme.accent-soft;
-            SilkIcon {
-                x: 10px;
-                y: 10px;
-                kind: 0;
-                tint: Theme.accent;
-            }
-        }
-        VerticalLayout {
-            x: 68px;
-            y: 0px;
-            width: parent.width - 68px - 40px;
+        x: 20px;
+        y: (parent.height - self.height) / 2;
+        width: 40px;
+        height: 40px;
+        border-radius: 20px;
+        background: Theme.accent-soft;
+        Text {
+            width: parent.width;
             height: parent.height;
-            alignment: center;
-            spacing: 2px;
-            Text { text: root.title; font-size: 17px; font-weight: 600; color: Theme.fg; overflow: elide; }
-            if root.subtitle != "" : Text { text: root.subtitle; font-size: 14px; color: Theme.muted; overflow: elide; }
+            text: root.letter;
+            font-size: 17px;
+            font-weight: 600;
+            color: Theme.accent;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
-        SilkIcon {
-            x: parent.width - 34px;
-            y: (parent.height - self.height) / 2;
-            kind: 7;
-            tint: Theme.muted;
-        }
+    }
+    VerticalLayout {
+        x: 76px;
+        y: 0px;
+        width: parent.width - 76px - 20px;
+        height: parent.height;
+        alignment: center;
+        spacing: 2px;
+        Text { text: root.title; font-size: 16px; font-weight: 600; color: Theme.fg; overflow: elide; }
+        if root.subtitle != "" : Text { text: root.subtitle; font-size: 14px; color: Theme.muted; overflow: elide; }
+    }
+    if !root.last : Rectangle {
+        x: 76px;
+        y: parent.height - 1px;
+        width: parent.width - 76px;
+        height: 1px;
+        background: Theme.outline;
     }
 }
 
@@ -1136,13 +1149,15 @@ export component MainWindow inherits Window {
                             width: parent.width;
                             height: parent.height;
                             // Extra room under the last row (so the Add login button never covers it) only once the list is long enough to reach that button.
-                            content-height: max(self.height, root.rows.length * 76px + (root.rows.length * 76px > self.height - 74px ? 96px : 0px));
+                            content-height: max(self.height, root.rows.length * 68px + (root.rows.length * 68px > self.height - 74px ? 96px : 0px));
                             VerticalLayout {
                                 y: 0px;
                                 width: root.width;
-                                height: root.rows.length * 76px;
+                                height: root.rows.length * 68px;
                                 alignment: start;
-                                for r in root.rows : RowItem {
+                                for r[i] in root.rows : RowItem {
+                                    letter: r.letter;
+                                    last: i == root.rows.length - 1;
                                     title: r.title;
                                     subtitle: r.subtitle;
                                     clicked => { root.open-login(r.id); }
@@ -1350,7 +1365,7 @@ export component MainWindow inherits Window {
                             border-radius: Theme.r-card;
                             background: Theme.accent-soft;
                             TouchArea { clicked => { root.gen-copy(); } }
-                            Text { x: 18px; y: 14px; text: "GENERATED PASSWORD"; font-size: 12px; font-weight: 500; color: Theme.muted; }
+                            Text { x: 18px; y: 14px; text: "Tap to copy"; font-size: 12px; font-weight: 500; color: Theme.muted; }
                             Text {
                                 x: 18px;
                                 y: 38px;
@@ -1452,7 +1467,7 @@ export component MainWindow inherits Window {
                         Text { text: "More"; font-size: 30px; font-weight: 600; color: Theme.fg; height: 40px; }
                         SilkBanner { error: root.error; notice: root.notice; }
 
-                        SectionLabel { text: "AUTOFILL"; }
+                        SectionLabel { text: "Autofill"; }
                         Rectangle {
                             height: 60px;
                             border-radius: Theme.r-card;
@@ -1484,7 +1499,7 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        SectionLabel { text: "CLOUD SYNC"; }
+                        SectionLabel { text: "Cloud sync"; }
                         Text {
                             text: root.cloud-status;
                             wrap: word-wrap;
@@ -1499,7 +1514,7 @@ export component MainWindow inherits Window {
                             active: !root.cloud-busy;
                             clicked => { root.cloud-sync(); }
                         }
-                        if root.cloud-linked : SilkButton { text: "Sign out"; clicked => { root.cloud-sign-out(); } }
+                        if root.cloud-linked : SettingRow { title: "Sign out"; clicked => { root.cloud-sign-out(); } }
                         if root.cloud-choice : Rectangle {
                             height: 280px;
                             border-radius: Theme.r-card;
@@ -1518,16 +1533,16 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        SectionLabel { text: "PROTON PASS"; }
+                        SectionLabel { text: "Proton Pass"; }
                         Text {
                             text: "Import an unencrypted Proton Pass export (JSON or CSV). Logins already in this vault are skipped.";
                             wrap: word-wrap;
                             font-size: 14px;
                             color: Theme.muted;
                         }
-                        SilkButton { text: "Import from Proton Pass"; primary: true; clicked => { root.import-proton(); } }
-                        SilkButton { text: "Export for Proton Pass (CSV)"; clicked => { root.export-ask = 1; } }
-                        SilkButton { text: "Export for Proton Pass (JSON)"; clicked => { root.export-ask = 2; } }
+                        SettingRow { title: "Import from Proton Pass"; clicked => { root.import-proton(); } }
+                        SettingRow { title: "Export for Proton Pass (CSV)"; hint: "Not encrypted"; clicked => { root.export-ask = 1; } }
+                        SettingRow { title: "Export for Proton Pass (JSON)"; hint: "Not encrypted"; clicked => { root.export-ask = 2; } }
                         Rectangle {
                             height: root.export-ask != 0 ? 200px : 0px;
                             clip: true;
@@ -1560,7 +1575,7 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        SectionLabel { text: "SECURITY"; }
+                        SectionLabel { text: "Security"; }
                         if root.bio-available : Rectangle {
                             height: 68px;
                             border-radius: Theme.r-card;
@@ -1594,9 +1609,9 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        SectionLabel { text: "VAULT"; }
-                        SilkButton { text: "Back up vault (encrypted)"; clicked => { root.backup(); } }
-                        SilkButton { text: "Lock now"; clicked => { root.lock(); } }
+                        SectionLabel { text: "Vault"; }
+                        SettingRow { title: "Back up vault"; hint: "Saves an encrypted .silk file"; clicked => { root.backup(); } }
+                        SettingRow { title: "Lock now"; clicked => { root.lock(); } }
                         more-end := Text { text: root.app-version == "" ? "" : "Silk \{root.app-version}"; font-size: 12px; color: Theme.muted; horizontal-alignment: center; }
                     }
                 }

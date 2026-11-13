@@ -1144,6 +1144,13 @@ fn refresh_rows(ui: &MainWindow, query: &str) {
                         id: e.id.as_str().into(),
                         title: e.title.as_str().into(),
                         subtitle: e.username.as_str().into(),
+                        letter: e
+                            .title
+                            .chars()
+                            .next()
+                            .map(|ch| ch.to_uppercase().to_string())
+                            .unwrap_or_default()
+                            .into(),
                     })
                     .collect()
             }
