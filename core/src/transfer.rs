@@ -167,6 +167,7 @@ fn make_login(
         url,
         otp: totp.trim().to_string(),
         notes,
+        ..Default::default()
     }
 }
 
@@ -425,6 +426,20 @@ fn is_note(e: &Entry) -> bool {
         && e.otp.trim().is_empty()
 }
 
+/// The note column of an export. Cards, identities and other items keep their labelled fields as
+/// lines of the note, since neither file format has a place for them.
+fn export_note(e: &Entry) -> String {
+    let mut note = e.notes.clone();
+    let lines = e
+        .fields
+        .iter()
+        .filter(|f| !f.value.is_empty())
+        .map(|f| format!("{}: {}", f.label, f.value))
+        .collect();
+    append_lines(&mut note, lines);
+    note
+}
+
 /// Proton Pass splits the login into an email and a username column.
 fn split_login(username: &str) -> (&str, &str) {
     if username.contains('@') {
@@ -440,6 +455,9 @@ pub fn export_csv(entries: &[Entry], now: u64) -> String {
         "type,name,url,email,username,password,note,totp,createTime,modifyTime,vault\n",
     );
     for e in entries {
+        if e.kind == "folder" {
+            continue;
+        }
         let (email, user) = split_login(&e.username);
         let cols = [
             (if is_note(e) { "note" } else { "login" }).to_string(),
@@ -448,7 +466,7 @@ pub fn export_csv(entries: &[Entry], now: u64) -> String {
             email.to_string(),
             user.to_string(),
             e.password.clone(),
-            e.notes.clone(),
+            export_note(e),
             otp_uri(e),
             now.to_string(),
             now.to_string(),
@@ -466,6 +484,7 @@ pub fn export_json(entries: &[Entry], now: u64) -> String {
     let share = new_id();
     let items: Vec<Value> = entries
         .iter()
+        .filter(|e| e.kind != "folder")
         .map(|e| {
             let (email, user) = split_login(&e.username);
             let note = is_note(e);
@@ -491,7 +510,7 @@ pub fn export_json(entries: &[Entry], now: u64) -> String {
                 "itemId": new_id(),
                 "shareId": share,
                 "data": {
-                    "metadata": { "name": e.title, "note": e.notes, "itemUuid": new_id() },
+                    "metadata": { "name": e.title, "note": export_note(e), "itemUuid": new_id() },
                     "extraFields": Vec::<String>::new(),
                     "type": kind,
                     "content": content,
@@ -654,6 +673,7 @@ mod tests {
                 url: "https://acme.test".into(),
                 otp: "JBSW Y3DP-EHPK 3PXP".into(),
                 notes: "a\nb".into(),
+                ..Default::default()
             },
             Entry {
                 id: "2".into(),

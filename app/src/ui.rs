@@ -2,7 +2,8 @@
 
 use crate::bridge;
 use crate::state::{self, AuthHow, Event};
-use crate::{MainWindow, OtpRow, Row, Theme};
+use crate::{FormField, MainWindow, OtpRow, Row, Theme};
+use silk_core::entry::{template, Field, KINDS};
 use silk_core::keyfile::{KeyFile, Login};
 use silk_core::otp::{self, OtpParams};
 use silk_core::session;
@@ -75,6 +76,12 @@ struct Ctl {
     /// The tabs (1 logins, 3 codes, 4 generator, 5 more) the user came through, oldest first, without the
     /// one on screen. The phone's Back button walks back along it.
     tabs: Vec<i32>,
+    /// Which list of choices is open: 0 none, 1 the item types (Add item), 2 the folders of the item form.
+    sheet: i32,
+    /// The folder the item in the form belongs to (empty: none).
+    form_folder: String,
+    /// The labelled fields of the card, identity or other item in the form.
+    form_model: Rc<VecModel<FormField>>,
 }
 
 type Shared = Rc<RefCell<Ctl>>;
@@ -107,6 +114,7 @@ pub fn run(dir: PathBuf) {
         );
         apply_settings(&ui, &c.settings);
         ui.set_otp_rows(ModelRc::from(c.code_model.clone()));
+        ui.set_form_fields(ModelRc::from(c.form_model.clone()));
         c.creating = !state::session().exists();
         c.auth_mode = bridge::is_autofill_request();
         // Blocked until the setting says otherwise, and always on the autofill unlock screen.
@@ -234,8 +242,139 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         }
     });
 
-    handler!(ui, ctl, on_new_login, |ui, c| {
-        load_form(&ui, &mut c, None);
+    handler!(ui, ctl, on_new_item, |ui, c| {
+        state::touch();
+        // (icon, id, title, hint). The icon numbers are RowItem's: 7 is the login icon of this list.
+        let kinds = [
+            (7, "login", "Login", "Username, password and website"),
+            (1, "card", "Card", "Payment card details"),
+            (2, "note", "Note", "Free-form text"),
+            (3, "identity", "Identity", "Name, address and contact details"),
+            (4, "password", "Password", "A password on its own"),
+            (5, "other", "Other", "Fields you name yourself"),
+            (6, "folder", "Folder", "Group items together"),
+        ];
+        let rows: Vec<Row> = kinds
+            .iter()
+            .map(|&(kind, id, title, hint)| Row {
+                id: id.into(),
+                title: title.into(),
+                subtitle: hint.into(),
+                letter: "".into(),
+                kind,
+            })
+            .collect();
+        c.sheet = 1;
+        ui.set_sheet_title("Add item".into());
+        ui.set_sheet_rows(ModelRc::new(VecModel::from(rows)));
+        ui.set_sheet_open(true);
+    });
+    handler!(ui, ctl, on_choose_folder, |ui, c| {
+        state::touch();
+        let mut rows = vec![Row {
+            id: "".into(),
+            title: "No folder".into(),
+            subtitle: "".into(),
+            letter: "".into(),
+            kind: 6,
+        }];
+        rows.extend(folder_choices());
+        c.sheet = 2;
+        ui.set_sheet_title("Folder".into());
+        ui.set_sheet_rows(ModelRc::new(VecModel::from(rows)));
+        ui.set_sheet_open(true);
+    });
+    {
+        let (weak, shared) = (ui.as_weak(), ctl.clone());
+        ui.on_sheet_pick(move |id| {
+            let ui = weak.unwrap();
+            let mut c = shared.borrow_mut();
+            state::touch();
+            let sheet = std::mem::take(&mut c.sheet);
+            match sheet {
+                1 => {
+                    let kind = KINDS.iter().position(|k| *k == id.as_str()).unwrap_or(0);
+                    load_form(&ui, &mut c, None, kind);
+                }
+                2 => {
+                    c.form_folder = id.to_string();
+                    ui.set_f_folder_name(folder_title(&c.form_folder).into());
+                }
+                _ => {}
+            }
+        });
+    }
+    {
+        let weak = ui.as_weak();
+        ui.on_open_folder(move |id| {
+            let ui = weak.unwrap();
+            state::touch();
+            ui.set_folder_name(folder_title(&id).into());
+            ui.set_folder_id(id);
+            ui.set_query("".into());
+            refresh_rows(&ui, "");
+        });
+    }
+    handler!(ui, ctl, on_folder_back, |ui, _c| {
+        state::touch();
+        ui.set_folder_id("".into());
+        ui.set_folder_name("".into());
+        refresh_rows(&ui, &ui.get_query());
+    });
+    {
+        let shared = ctl.clone();
+        ui.on_field_edited(move |i, text| {
+            state::touch();
+            let c = shared.borrow();
+            let i = i as usize;
+            if let Some(mut f) = c.form_model.row_data(i) {
+                f.value = text;
+                c.form_model.set_row_data(i, f);
+            }
+        });
+    }
+    {
+        let shared = ctl.clone();
+        ui.on_field_label_edited(move |i, text| {
+            state::touch();
+            let c = shared.borrow();
+            let i = i as usize;
+            if let Some(mut f) = c.form_model.row_data(i) {
+                f.label = text;
+                c.form_model.set_row_data(i, f);
+            }
+        });
+    }
+    {
+        let shared = ctl.clone();
+        ui.on_field_toggle_secret(move |i| {
+            state::touch();
+            let c = shared.borrow();
+            let i = i as usize;
+            if let Some(mut f) = c.form_model.row_data(i) {
+                f.secret = !f.secret;
+                c.form_model.set_row_data(i, f);
+            }
+        });
+    }
+    {
+        let shared = ctl.clone();
+        ui.on_field_remove(move |i| {
+            state::touch();
+            let c = shared.borrow();
+            if (i as usize) < c.form_model.row_count() {
+                let _ = c.form_model.remove(i as usize);
+            }
+        });
+    }
+    handler!(ui, ctl, on_field_add, |_u, c| {
+        state::touch();
+        c.form_model.push(FormField {
+            label: "".into(),
+            value: "".into(),
+            secret: false,
+            custom: true,
+        });
     });
     {
         let (weak, shared) = (ui.as_weak(), ctl.clone());
@@ -245,8 +384,8 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
                 .entries()
                 .and_then(|es| es.iter().find(|e| e.id == id.as_str()).cloned());
             match found {
-                Some(e) => load_form(&ui, &mut shared.borrow_mut(), Some(e)),
-                None => ui.set_error("That login no longer exists.".into()),
+                Some(e) => load_form(&ui, &mut shared.borrow_mut(), Some(e), 0),
+                None => ui.set_error("That item no longer exists.".into()),
             }
         });
     }
@@ -257,15 +396,51 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
         system_back(&ui, &mut c);
     });
     handler!(ui, ctl, on_save, |ui, c| {
-        let entry = Entry {
+        let kind = (ui.get_f_kind().max(0) as usize).min(KINDS.len() - 1);
+        let mut entry = Entry {
             id: c.editing.clone().unwrap_or_else(new_id),
             title: ui.get_f_title().trim().to_string(),
-            username: ui.get_f_user().trim().to_string(),
-            password: ui.get_f_password().to_string(),
-            url: ui.get_f_url().trim().to_string(),
-            otp: ui.get_f_otp().trim().to_string(),
-            notes: ui.get_f_notes().to_string(),
+            kind: KINDS[kind].to_string(),
+            folder: if kind == 6 {
+                String::new()
+            } else {
+                c.form_folder.clone()
+            },
+            notes: if kind == 6 {
+                String::new()
+            } else {
+                ui.get_f_notes().to_string()
+            },
+            ..Default::default()
         };
+        match kind {
+            0 => {
+                entry.username = ui.get_f_user().trim().to_string();
+                entry.password = ui.get_f_password().to_string();
+                entry.url = ui.get_f_url().trim().to_string();
+                entry.otp = ui.get_f_otp().trim().to_string();
+            }
+            4 => entry.password = ui.get_f_password().to_string(),
+            1 | 3 | 5 => {
+                entry.fields = c
+                    .form_model
+                    .iter()
+                    .filter(|f| {
+                        !f.value.trim().is_empty() || (f.custom && !f.label.trim().is_empty())
+                    })
+                    .map(|f| Field {
+                        label: if f.label.trim().is_empty() {
+                            "Field".to_string()
+                        } else {
+                            f.label.trim().to_string()
+                        },
+                        value: f.value.to_string(),
+                        secret: f.secret,
+                    })
+                    .collect();
+            }
+            _ => {}
+        }
         let result = state::session().upsert(entry);
         if result.is_ok() {
             auto_backup(&mut c);
@@ -282,7 +457,12 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
     });
     handler!(ui, ctl, on_delete_login, |ui, c| {
         if let Some(id) = c.editing.take() {
-            let result = state::session().remove(&id);
+            let is_folder = ui.get_f_kind() == 6;
+            let result = if is_folder {
+                state::session().remove_folder(&id)
+            } else {
+                state::session().remove(&id)
+            };
             if result.is_ok() {
                 auto_backup(&mut c);
             }
@@ -968,6 +1148,8 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
             } else {
                 ui.set_notice("".into());
                 ui.set_query("".into());
+                ui.set_folder_id("".into());
+                ui.set_folder_name("".into());
                 refresh_rows(ui, "");
                 c.tabs.clear(); // the logins list is the first screen: Back from here leaves the app
                 ui.set_screen(1);
@@ -1100,6 +1282,10 @@ fn handle_event(ui: &MainWindow, c: &mut Ctl, ev: Event) {
 
 fn lock_ui(ui: &MainWindow, c: &mut Ctl) {
     c.tabs.clear();
+    c.form_model.set_vec(Vec::<FormField>::new());
+    c.form_folder.clear();
+    ui.set_folder_id("".into());
+    ui.set_folder_name("".into());
     c.editing = None;
     c.otp = None;
     c.codes.clear();
@@ -1122,35 +1308,161 @@ fn lock_ui(ui: &MainWindow, c: &mut Ctl) {
     bridge::restore_key_file();
 }
 
+/// Whether the vault has a folder to put an item in.
+fn has_folders() -> bool {
+    let mut s = state::session();
+    let any = s
+        .entries()
+        .map_or(false, |es| es.iter().any(|e| e.kind == "folder"));
+    any
+}
+
+/// The name of the folder with this id, or empty.
+fn folder_title(id: &str) -> String {
+    if id.is_empty() {
+        return String::new();
+    }
+    let mut s = state::session();
+    let name = s
+        .entries()
+        .and_then(|es| es.iter().find(|e| e.kind == "folder" && e.id == id))
+        .map(|e| e.title.clone())
+        .unwrap_or_default();
+    name
+}
+
+/// The rows of the folder choice, by name.
+fn folder_choices() -> Vec<Row> {
+    let mut s = state::session();
+    let mut list: Vec<(String, String)> = match s.entries() {
+        Some(es) => es
+            .iter()
+            .filter(|e| e.kind == "folder")
+            .map(|e| (e.id.clone(), e.title.clone()))
+            .collect(),
+        None => Vec::new(),
+    };
+    list.sort_by_key(|f| f.1.to_lowercase());
+    list.into_iter()
+        .map(|(id, title)| Row {
+            id: id.into(),
+            title: title.into(),
+            subtitle: "".into(),
+            letter: "".into(),
+            kind: 6,
+        })
+        .collect()
+}
+
+/// The rows of the form for a card, identity or other item. A card and an identity always show all
+/// their fields; an other item shows the ones it has.
+fn form_rows(kind: usize, stored: &[Field]) -> Vec<FormField> {
+    match KINDS[kind] {
+        "card" | "identity" => template(KINDS[kind])
+            .into_iter()
+            .map(|t| {
+                let value = stored
+                    .iter()
+                    .find(|s| s.label == t.label)
+                    .map(|s| s.value.as_str())
+                    .unwrap_or("");
+                FormField {
+                    label: t.label.as_str().into(),
+                    value: value.into(),
+                    secret: t.secret,
+                    custom: false,
+                }
+            })
+            .collect(),
+        "other" => stored
+            .iter()
+            .map(|f| FormField {
+                label: f.label.as_str().into(),
+                value: f.value.as_str().into(),
+                secret: f.secret,
+                custom: true,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The list on the Vault screen: the open folder's items, or at the top level the folders and the
+/// items in no folder. A search looks through everything.
 fn refresh_rows(ui: &MainWindow, query: &str) {
     let q = query.trim().to_lowercase();
+    let mut folder = ui.get_folder_id().to_string();
     let rows: Vec<Row> = {
         let mut s = state::session();
         let list: Vec<Row> = match s.entries() {
             Some(entries) => {
+                // A folder that no longer exists (deleted here or by a sync) is left.
+                if !folder.is_empty() {
+                    let name = entries
+                        .iter()
+                        .find(|e| e.kind == "folder" && e.id == folder)
+                        .map(|e| e.title.clone());
+                    match name {
+                        Some(n) => ui.set_folder_name(n.into()),
+                        None => {
+                            folder.clear();
+                            ui.set_folder_id("".into());
+                            ui.set_folder_name("".into());
+                        }
+                    }
+                }
+                let folders: Vec<&str> = entries
+                    .iter()
+                    .filter(|e| e.kind == "folder")
+                    .map(|e| e.id.as_str())
+                    .collect();
                 let mut found: Vec<&Entry> = entries
                     .iter()
                     .filter(|e| {
-                        q.is_empty()
-                            || e.title.to_lowercase().contains(&q)
-                            || e.username.to_lowercase().contains(&q)
-                            || e.url.to_lowercase().contains(&q)
+                        if !q.is_empty() {
+                            e.kind != "folder"
+                                && (e.title.to_lowercase().contains(&q)
+                                    || e.username.to_lowercase().contains(&q)
+                                    || e.url.to_lowercase().contains(&q)
+                                    || e.subtitle().to_lowercase().contains(&q))
+                        } else if folder.is_empty() {
+                            e.folder.is_empty() || !folders.contains(&e.folder.as_str())
+                        } else {
+                            e.folder == folder
+                        }
                     })
                     .collect();
-                found.sort_by_key(|e| e.title.to_lowercase());
+                found.sort_by_key(|e| (e.kind != "folder", e.title.to_lowercase()));
                 found
                     .into_iter()
-                    .map(|e| Row {
-                        id: e.id.as_str().into(),
-                        title: e.title.as_str().into(),
-                        subtitle: e.username.as_str().into(),
-                        letter: e
-                            .title
-                            .chars()
-                            .next()
-                            .map(|ch| ch.to_uppercase().to_string())
-                            .unwrap_or_default()
-                            .into(),
+                    .map(|e| {
+                        let kind = e.kind_index() as i32;
+                        let subtitle = if e.kind == "folder" {
+                            let n = entries.iter().filter(|x| x.folder == e.id).count();
+                            if n == 1 {
+                                "1 item".to_string()
+                            } else {
+                                format!("{n} items")
+                            }
+                        } else {
+                            e.subtitle()
+                        };
+                        let letter = if kind == 0 {
+                            e.title
+                                .chars()
+                                .next()
+                                .map(|ch| ch.to_uppercase().to_string())
+                                .unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
+                        Row {
+                            id: e.id.as_str().into(),
+                            title: e.title.as_str().into(),
+                            subtitle: subtitle.into(),
+                            letter: letter.into(),
+                            kind,
+                        }
                     })
                     .collect()
             }
@@ -1210,6 +1522,12 @@ fn track_tabs(c: &mut Ctl, from: i32, to: i32) {
 /// screen on top. From the first screen there is nothing to go back to, so the app is left, as before.
 fn system_back(ui: &MainWindow, c: &mut Ctl) {
     state::touch();
+    // An open list of choices comes first: Back closes it.
+    if ui.get_sheet_open() {
+        ui.set_sheet_open(false);
+        c.sheet = 0;
+        return;
+    }
     // An open question comes first: Back answers it with "cancel".
     if ui.get_confirm_gen() {
         ui.set_confirm_gen(false);
@@ -1227,6 +1545,11 @@ fn system_back(ui: &MainWindow, c: &mut Ctl) {
         7 => {
             let to = if c.cloud_from_lock { 0 } else { 5 };
             show(ui, c, to);
+        }
+        1 if !ui.get_folder_id().is_empty() => {
+            ui.set_folder_id("".into());
+            ui.set_folder_name("".into());
+            refresh_rows(ui, &ui.get_query());
         }
         1 | 3 | 4 | 5 => match c.tabs.pop() {
             Some(tab) => show(ui, c, tab),
@@ -1300,10 +1623,26 @@ fn scan_problem(link: &str) -> Option<&'static str> {
     }
 }
 
-fn load_form(ui: &MainWindow, c: &mut Ctl, entry: Option<Entry>) {
+fn load_form(ui: &MainWindow, c: &mut Ctl, entry: Option<Entry>, new_kind: usize) {
     c.editing = entry.as_ref().map(|x| x.id.clone());
     let e = entry.unwrap_or_default();
+    let kind = if c.editing.is_none() {
+        new_kind
+    } else {
+        e.kind_index()
+    };
     ui.set_is_new(c.editing.is_none());
+    ui.set_f_kind(kind as i32);
+    ui.set_f_kind_name(KINDS[kind].into());
+    // A new item starts in the folder that is open; a folder is never inside one.
+    c.form_folder = if c.editing.is_none() && kind != 6 {
+        ui.get_folder_id().to_string()
+    } else {
+        e.folder.clone()
+    };
+    ui.set_f_folder_name(folder_title(&c.form_folder).into());
+    ui.set_has_folders(has_folders());
+    c.form_model.set_vec(form_rows(kind, &e.fields));
     ui.set_f_title(e.title.as_str().into());
     ui.set_f_user(e.username.as_str().into());
     ui.set_f_password(e.password.as_str().into());
@@ -1315,7 +1654,7 @@ fn load_form(ui: &MainWindow, c: &mut Ctl, entry: Option<Entry>) {
     ui.set_error("".into());
     ui.set_notice("".into());
     c.otp = otp::parse(&e.otp);
-    if c.editing.is_none() && c.settings.auto_generate {
+    if c.editing.is_none() && (kind == 0 || kind == 4) && c.settings.auto_generate {
         ui.set_f_password(generate(&c.settings.generator).into());
         ui.set_show_password(true);
     }
@@ -1371,6 +1710,7 @@ fn group(code: &str) -> String {
 /// Closes the login form and returns to the list it was opened from.
 fn leave_form(ui: &MainWindow, c: &mut Ctl) {
     clear_form(ui);
+    c.form_model.set_vec(Vec::<FormField>::new());
     ui.set_error("".into());
     refresh_rows(ui, &ui.get_query());
     refresh_codes(c);

@@ -4,7 +4,8 @@
 // Motion: screens cross-fade and rise into place, the tab bar slides, controls respond to
 // touch, banners expand, and the countdown bars glide.
 
-export struct Row { id: string, title: string, subtitle: string, letter: string }
+export struct Row { id: string, title: string, subtitle: string, letter: string, kind: int }
+export struct FormField { label: string, value: string, secret: bool, custom: bool }
 export struct OtpRow { id: string, title: string, subtitle: string, code: string, left-text: string, progress: float }
 
 // Light is the specified palette. Dark (follows the system setting) is the same neutral family inverted.
@@ -42,7 +43,7 @@ export global Theme {
 }
 
 // Line icons drawn as vector paths (no image files).
-// 0 key, 1 clock, 2 sliders, 3 menu, 4 plus, 5 search, 6 shield, 8 minus
+// 0 key, 1 clock, 2 sliders, 3 menu, 4 plus, 5 search, 6 shield, 7 card, 8 minus, 9 note, 10 identity, 11 folder, 12 other, 13 person
 component SilkIcon inherits Rectangle {
     in property <int> kind: 0;
     in-out property <color> tint: Theme.fg;
@@ -127,6 +128,12 @@ component SilkIcon inherits Rectangle {
         stroke-line-cap: round;
         stroke-line-join: round;
     }
+    if root.kind == 7 : Path { width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24; commands: "M5 6 L19 6 A2 2 0 0 1 21 8 L21 16 A2 2 0 0 1 19 18 L5 18 A2 2 0 0 1 3 16 L3 8 A2 2 0 0 1 5 6 Z M3 10 L21 10 M7 14.5 L11 14.5"; stroke: root.tint; stroke-width: root.thickness; stroke-line-cap: round; stroke-line-join: round; }
+    if root.kind == 9 : Path { width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24; commands: "M7 3 L14 3 L19 8 L19 19 A2 2 0 0 1 17 21 L7 21 A2 2 0 0 1 5 19 L5 5 A2 2 0 0 1 7 3 Z M14 3 L14 8 L19 8 M8.5 13 L15.5 13 M8.5 17 L13 17"; stroke: root.tint; stroke-width: root.thickness; stroke-line-cap: round; stroke-line-join: round; }
+    if root.kind == 10 : Path { width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24; commands: "M5 5 L19 5 A2 2 0 0 1 21 7 L21 17 A2 2 0 0 1 19 19 L5 19 A2 2 0 0 1 3 17 L3 7 A2 2 0 0 1 5 5 Z M10.5 10.5 A2 2 0 1 1 6.5 10.5 A2 2 0 1 1 10.5 10.5 Z M6 16 C6.5 14.5 7.5 14 8.5 14 C9.5 14 10.5 14.5 11 16 M14 10 L18 10 M14 14 L18 14"; stroke: root.tint; stroke-width: root.thickness; stroke-line-cap: round; stroke-line-join: round; }
+    if root.kind == 11 : Path { width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24; commands: "M4 7 A2 2 0 0 1 6 5 L9.5 5 L12 8 L18 8 A2 2 0 0 1 20 10 L20 17 A2 2 0 0 1 18 19 L6 19 A2 2 0 0 1 4 17 Z"; stroke: root.tint; stroke-width: root.thickness; stroke-line-cap: round; stroke-line-join: round; }
+    if root.kind == 12 : Path { width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24; commands: "M12 3 L20 7.5 L20 16.5 L12 21 L4 16.5 L4 7.5 Z M4 7.5 L12 12 L20 7.5 M12 12 L12 21"; stroke: root.tint; stroke-width: root.thickness; stroke-line-cap: round; stroke-line-join: round; }
+    if root.kind == 13 : Path { width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24; commands: "M15.5 8 A3.5 3.5 0 1 1 8.5 8 A3.5 3.5 0 1 1 15.5 8 Z M5 20 C5 16 8 14 12 14 C16 14 19 16 19 20"; stroke: root.tint; stroke-width: root.thickness; stroke-line-cap: round; stroke-line-join: round; }
     if root.kind == 8 : Path {
         width: parent.width;
         height: parent.height;
@@ -721,7 +728,7 @@ component TabBar inherits Rectangle {
         background: Theme.accent-soft;
         animate x { duration: 320ms; easing: cubic-bezier(0.34, 1.3, 0.64, 1); }
     }
-    for label[i] in ["Logins", "Codes", "Generator", "More"] : Rectangle {
+    for label[i] in ["Vault", "Codes", "Generator", "More"] : Rectangle {
         x: i * (root.width / 4);
         y: 0px;
         width: root.width / 4;
@@ -785,6 +792,9 @@ component RowItem inherits Rectangle {
     in property <string> subtitle;
     in property <string> letter;
     in property <bool> last: false;
+    in property <int> kind: 0;
+    // A login shows the first letter of its name; every other kind shows its own icon (7 is the login icon of the type list).
+    property <int> icon: root.kind == 1 ? 7 : root.kind == 2 ? 9 : root.kind == 3 ? 10 : root.kind == 4 ? 0 : root.kind == 5 ? 12 : root.kind == 6 ? 11 : root.kind == 7 ? 13 : -1;
     callback clicked();
     height: 68px;
     background: touch.pressed ? Theme.surface : touch.has-hover ? Theme.elevated : transparent;
@@ -797,7 +807,7 @@ component RowItem inherits Rectangle {
         height: 40px;
         border-radius: 20px;
         background: Theme.accent-soft;
-        Text {
+        if root.icon < 0 : Text {
             width: parent.width;
             height: parent.height;
             text: root.letter;
@@ -806,6 +816,12 @@ component RowItem inherits Rectangle {
             color: Theme.accent;
             horizontal-alignment: center;
             vertical-alignment: center;
+        }
+        if root.icon >= 0 : SilkIcon {
+            x: 8px;
+            y: 8px;
+            kind: root.icon;
+            tint: Theme.accent;
         }
     }
     VerticalLayout {
@@ -944,7 +960,30 @@ export component MainWindow inherits Window {
     callback backup();
     callback enable-autofill();
     callback search();
-    callback new-login();
+    callback new-item();
+    callback open-folder(string);
+    callback folder-back();
+    callback choose-folder();
+    callback sheet-pick(string);
+    callback field-edited(int, string);
+    callback field-label-edited(int, string);
+    callback field-toggle-secret(int);
+    callback field-remove(int);
+    callback field-add();
+    // What the item form shows: its kind (0 login, 1 card, 2 note, 3 identity, 4 password, 5 other, 6 folder),
+    // the kind's name, the folder the item is in, and the labelled fields of a card, identity or other item.
+    in property <int> f-kind: 0;
+    in property <string> f-kind-name: "login";
+    in property <string> f-folder-name: "";
+    in property <bool> has-folders: false;
+    in property <[FormField]> form-fields: [];
+    // The folder the list shows (empty: the top level).
+    in property <string> folder-id: "";
+    in property <string> folder-name: "";
+    // The list-of-choices dialog: the item types for Add item, the folders for the Folder row of an item.
+    in-out property <bool> sheet-open: false;
+    in property <string> sheet-title: "";
+    in property <[Row]> sheet-rows: [];
     callback open-login(string);
     callback save();
     callback delete-login();
@@ -957,6 +996,7 @@ export component MainWindow inherits Window {
     // Screens stay loaded and fade out, so hand keyboard focus to a hidden item on every change.
     changed screen => {
         root.confirm-gen = false;
+        root.sheet-open = false;
         focus-sink.focus();
     }
     callback copy-password();
@@ -1107,8 +1147,14 @@ export component MainWindow inherits Window {
                         padding-left: 20px;
                         padding-right: 20px;
                         spacing: 2px;
-                        Text { text: "Logins"; font-size: 30px; font-weight: 600; color: Theme.fg; }
-                        Text { text: root.rows.length == 1 ? "1 login" : "\{root.rows.length} logins"; font-size: 14px; color: Theme.muted; }
+                        if root.folder-name != "" : HorizontalLayout {
+                            spacing: 4px;
+                            SilkLink { text: "Back"; clicked => { root.folder-back(); } }
+                            Rectangle { horizontal-stretch: 1; }
+                            SilkLink { text: "Edit folder"; clicked => { root.open-login(root.folder-id); } }
+                        }
+                        Text { text: root.folder-name == "" ? "Vault" : root.folder-name; font-size: 30px; font-weight: 600; color: Theme.fg; overflow: elide; }
+                        Text { text: root.rows.length == 1 ? "1 item" : "\{root.rows.length} items"; font-size: 14px; color: Theme.muted; }
                     }
                     if !root.autofill-on : VerticalLayout {
                         padding-left: 16px;
@@ -1135,7 +1181,7 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         padding-left: 16px;
                         padding-right: 16px;
-                        SilkField { icon: 5; label: "Search logins"; text <=> root.query; edited => { root.activity(); root.search(); } }
+                        SilkField { icon: 5; label: "Search"; text <=> root.query; edited => { root.activity(); root.search(); } }
                     }
                     VerticalLayout {
                         padding-left: 16px;
@@ -1156,11 +1202,12 @@ export component MainWindow inherits Window {
                                 height: root.rows.length * 68px;
                                 alignment: start;
                                 for r[i] in root.rows : RowItem {
+                                    kind: r.kind;
                                     letter: r.letter;
                                     last: i == root.rows.length - 1;
                                     title: r.title;
                                     subtitle: r.subtitle;
-                                    clicked => { root.open-login(r.id); }
+                                    clicked => { if (r.kind == 6) { root.open-folder(r.id); } else { root.open-login(r.id); } }
                                 }
                             }
                         }
@@ -1170,8 +1217,8 @@ export component MainWindow inherits Window {
                             width: parent.width;
                             height: min(parent.height, 380px);
                             icon: 0;
-                            title: root.query == "" ? "No logins yet" : "No matches";
-                            text: root.query == "" ? "Add your first login, or import from Proton Pass under More." : "No logins match your search.";
+                            title: root.query != "" ? "No matches" : root.folder-name != "" ? "This folder is empty" : "Nothing saved yet";
+                            text: root.query != "" ? "Nothing matches your search." : "Add your first item, or import from Proton Pass under More.";
                         }
                         Rectangle {
                             width: 152px;
@@ -1195,13 +1242,13 @@ export component MainWindow inherits Window {
                                 y: 0px;
                                 width: parent.width - 64px;
                                 height: parent.height;
-                                text: "Add login";
+                                text: "Add item";
                                 font-size: 16px;
                                 font-weight: 500;
                                 color: Theme.on-accent;
                                 vertical-alignment: center;
                             }
-                            fab-touch := TouchArea { clicked => { root.new-login(); } }
+                            fab-touch := TouchArea { clicked => { root.new-item(); } }
                         }
                     }
                 }
@@ -1222,7 +1269,7 @@ export component MainWindow inherits Window {
                         padding-right: 8px;
                         spacing: 4px;
                         SilkLink { text: "Back"; clicked => { root.back(); } }
-                        Text { text: root.is-new ? "New login" : "Edit login"; font-size: 20px; font-weight: 600; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: (root.is-new ? "New " : "Edit ") + root.f-kind-name; font-size: 20px; font-weight: 600; color: Theme.fg; vertical-alignment: center; horizontal-stretch: 1; }
                         if !root.is-new : SilkLink { text: "Delete"; tint: Theme.danger; clicked => { root.delete-login(); } }
                     }
                     Flickable {
@@ -1235,24 +1282,24 @@ export component MainWindow inherits Window {
                             alignment: start;
                             padding: 16px;
                             spacing: 10px;
-                            SilkField { label: "Title"; text <=> root.f-title; edited => { root.activity(); } }
-                            SilkField { label: "Username or email"; text <=> root.f-user; edited => { root.activity(); } }
-                            SilkField { label: "Password"; secret: !root.show-password; text <=> root.f-password; edited => { root.activity(); } }
-                            HorizontalLayout {
+                            SilkField { label: root.f-kind == 6 ? "Folder name" : "Title"; text <=> root.f-title; edited => { root.activity(); } }
+                            if root.f-kind == 0 : SilkField { label: "Username or email"; text <=> root.f-user; edited => { root.activity(); } }
+                            if root.f-kind == 0 || root.f-kind == 4 : SilkField { label: "Password"; secret: !root.show-password; text <=> root.f-password; edited => { root.activity(); } }
+                            if root.f-kind == 0 || root.f-kind == 4 : HorizontalLayout {
                                 spacing: 4px;
                                 alignment: start;
                                 SilkLink { text: root.show-password ? "Hide" : "Show"; clicked => { root.show-password = !root.show-password; } }
                                 SilkLink { text: "Generate"; clicked => { if (!root.is-new && root.f-password != "") { root.confirm-gen = true; } else { root.generate(); } } }
                                 SilkLink { text: "Copy"; clicked => { root.copy-password(); } }
                             }
-                            SilkField { label: "Website or app"; text <=> root.f-url; edited => { root.activity(); } }
-                            Text {
+                            if root.f-kind == 0 : SilkField { label: "Website or app"; text <=> root.f-url; edited => { root.activity(); } }
+                            if root.f-kind == 0 : Text {
                                 text: "https://example.com or androidapp://com.example.app. Autofill uses this to find the login.";
                                 wrap: word-wrap;
                                 font-size: 12px;
                                 color: Theme.muted;
                             }
-                            SilkField { label: "One-time password secret"; text <=> root.f-otp; edited => { root.activity(); root.otp-edited(); } }
+                            if root.f-kind == 0 : SilkField { label: "One-time password secret"; text <=> root.f-otp; edited => { root.activity(); root.otp-edited(); } }
                             if root.otp-code != "" : OtpCard {
                                 code: root.otp-code;
                                 left-text: root.otp-left-text;
@@ -1265,9 +1312,30 @@ export component MainWindow inherits Window {
                                 font-size: 13px;
                                 color: Theme.danger;
                             }
-                            SilkField { label: "Notes"; multiline: true; text <=> root.f-notes; edited => { root.activity(); } }
+                            if root.f-kind == 1 || root.f-kind == 3 || root.f-kind == 5 : VerticalLayout {
+                            spacing: 10px;
+                            for f[i] in root.form-fields : VerticalLayout {
+                                spacing: 4px;
+                                if f.custom : SilkField { label: "Field name"; text: f.label; edited => { root.activity(); root.field-label-edited(i, self.text); } }
+                                SilkField { label: f.custom ? "Value" : f.label; secret: f.secret && !root.show-password; text: f.value; edited => { root.activity(); root.field-edited(i, self.text); } }
+                                if f.custom : HorizontalLayout {
+                                    spacing: 4px;
+                                    alignment: start;
+                                    SilkLink { text: f.secret ? "Unhide" : "Hide value"; clicked => { root.field-toggle-secret(i); } }
+                                    SilkLink { text: "Remove"; tint: Theme.danger; clicked => { root.field-remove(i); } }
+                                }
+                            }
+                            if root.f-kind != 3 : HorizontalLayout {
+                                spacing: 4px;
+                                alignment: start;
+                                if root.f-kind == 5 : SilkLink { text: "Add field"; clicked => { root.field-add(); } }
+                                SilkLink { text: root.show-password ? "Hide" : "Show"; clicked => { root.show-password = !root.show-password; } }
+                            }
+                        }
+                        if root.f-kind != 6 : SilkField { label: root.f-kind == 2 ? "Note" : "Notes"; multiline: true; height: root.f-kind == 2 ? 280px : 124px; text <=> root.f-notes; edited => { root.activity(); } }
+                        if root.f-kind != 6 && root.has-folders : SettingRow { title: "Folder"; hint: root.f-folder-name == "" ? "None" : root.f-folder-name; clicked => { root.choose-folder(); } }
                             SilkBanner { error: root.error; notice: ""; }
-                            form-end := SilkButton { text: "Save login"; primary: true; active: root.f-title != ""; clicked => { root.save(); } }
+                            form-end := SilkButton { text: "Save " + root.f-kind-name; primary: true; active: root.f-title != ""; clicked => { root.save(); } }
                         }
                     }
                 }
@@ -1781,6 +1849,60 @@ export component MainWindow inherits Window {
                 }
                 SilkButton { text: "Replace password"; primary: true; clicked => { root.confirm-gen = false; root.generate(); } }
                 SilkLink { text: "Cancel"; clicked => { root.confirm-gen = false; } }
+            }
+        }
+    }
+
+    // A list of choices: the item types for Add item, the folders for the Folder row of an item.
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: Theme.scrim;
+        opacity: root.sheet-open ? 1.0 : 0.0;
+        visible: self.opacity > 0.01;
+        animate opacity { duration: 200ms; easing: ease-out; }
+        TouchArea { clicked => { root.sheet-open = false; } }
+        Rectangle {
+            width: min(root.width - 32px, 400px);
+            height: min(root.height - 96px, 72px + root.sheet-rows.length * 68px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 + (root.sheet-open ? 0px : 30px);
+            animate y { duration: 320ms; easing: cubic-bezier(0.34, 1.3, 0.64, 1); }
+            border-radius: Theme.r-card;
+            background: Theme.card;
+            border-width: 1px;
+            border-color: Theme.outline;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #0000002e;
+            drop-shadow-offset-y: 6px;
+            TouchArea { }
+            Text { x: 20px; y: 0px; width: parent.width - 40px; height: 64px; text: root.sheet-title; font-size: 19px; font-weight: 600; color: Theme.fg; vertical-alignment: center; }
+            Flickable {
+                x: 0px;
+                y: 64px;
+                width: parent.width;
+                height: parent.height - 72px;
+                content-height: root.sheet-rows.length * 68px;
+                VerticalLayout {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: root.sheet-rows.length * 68px;
+                    alignment: start;
+                    for r[i] in root.sheet-rows : RowItem {
+                        kind: r.kind;
+                        letter: r.letter;
+                        title: r.title;
+                        subtitle: r.subtitle;
+                        last: i == root.sheet-rows.length - 1;
+                        clicked => {
+                            root.sheet-open = false;
+                            root.sheet-pick(r.id);
+                        }
+                    }
+                }
             }
         }
     }

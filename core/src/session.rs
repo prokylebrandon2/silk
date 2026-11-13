@@ -161,6 +161,19 @@ impl Session {
         Ok(())
     }
 
+    /// Deletes a folder. The items in it stay in the vault, no longer in any folder.
+    pub fn remove_folder(&mut self, id: &str) -> Result<(), Error> {
+        self.check_idle();
+        let v = self.vault.as_mut().ok_or(Error::Locked)?;
+        for e in v.entries.iter_mut().filter(|e| e.folder == id) {
+            e.folder.clear();
+        }
+        v.remove(id);
+        self.save()?;
+        self.touch();
+        Ok(())
+    }
+
     /// Adds imported logins in one save. A login already in the vault (same title, username, website
     /// and password) is skipped. Returns `(added, duplicates)`.
     pub fn merge_entries(&mut self, incoming: Vec<Entry>) -> Result<(usize, usize), Error> {
@@ -342,6 +355,27 @@ mod tests {
         s.import(&backup_at_1).unwrap();
         open_with(&mut s, "password1");
         assert!(s.entries().unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_folder_keeps_its_items() {
+        let mut s = temp_session();
+        open_with(&mut s, "password1");
+        s.upsert(Entry {
+            id: "f".into(),
+            title: "Work".into(),
+            kind: "folder".into(),
+            ..Entry::default()
+        })
+        .unwrap();
+        let mut inside = entry("1");
+        inside.folder = "f".into();
+        s.upsert(inside).unwrap();
+        s.remove_folder("f").unwrap();
+        let left = s.entries().unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, "1");
+        assert!(left[0].folder.is_empty());
     }
 
     #[test]

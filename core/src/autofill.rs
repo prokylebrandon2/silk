@@ -133,6 +133,7 @@ mod tests {
             url: url.into(),
             otp: String::new(),
             notes: String::new(),
+            ..Default::default()
         }
     }
 
