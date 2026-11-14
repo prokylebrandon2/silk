@@ -68,7 +68,9 @@ backup    "SKBK" | version u8 | key slot[91] | vault file (the rest)
 key file  "SKEY" | version u8 | secret[64] | login_len u32 | login JSON      (login part optional; see "The key file")
 ```
 
-The browser extension signs in to Supabase Auth like the app does, downloads the two cloud files and joins them into the same backup (`joinBackup` in `browser-extension/src/vault.js`); it also accepts a `.silk` file. It reads the backup (`browser-extension/src/vault.js`) and the `.skln` inside it (`src/skln.js`; `src/chacha.js` carries its own ChaCha20-Poly1305 because WebCrypto has none).
+The browser extension signs in to Supabase Auth like the app does, downloads the two cloud files and joins them into the same backup (`joinBackup` in `browser-extension/src/vault.js`); it also accepts a `.silk` file. It reads and writes the backup (`browser-extension/src/vault.js`) and the `.skln` inside it (`src/skln.js`, a port of Kiln's `seal_with` and the member bundle; `src/chacha.js` carries its own ChaCha20-Poly1305 because WebCrypto has none). A save is the next revision of `vault.skln` under the same VEK with the key slot bytes unchanged, and `src/cloud.js` follows `core/src/sync.rs`: the higher authenticated revision wins.
+
+The extension opens without asking again in two layers (`src/device.js`, `src/state.js`, `src/cloud.js`). After the first sign-in it keeps only the refresh token, and after the first unlock (with "Stay unlocked" on) it keeps only the VEK. Each is sealed with AES-256-GCM under a non-extractable `CryptoKey` held in the profile's IndexedDB, so the sealed text in `chrome.storage.local` is useless alone; Lock deletes the key. The service worker (`background.js`) uses the same state to sync every 30 minutes and to answer the autofill script (`src/autofill.js`, a content script on `https` pages and `localhost`), which only ever receives titles and user names: the password is written into the page by `chrome.scripting` after a trusted click. Everything that changes the stored vault runs under one Web Lock (`silk-vault`) so the popup and the worker never write over each other.
 
 Key derivation (`core/src/kdf.rs`): `SHA-256(password)`, mixed with `SHA-256(key file material)` when a key file is used, then Argon2id (t=3, 64 MiB, p=4 by default) to 32 bytes. The material of a Silk key file is its 64-byte secret; the material of any other file is the whole file.
 
@@ -156,3 +158,4 @@ Sign-in is Supabase Auth only. A third-party provider (Firebase was tried) needs
 - **Change password screen.** The core part exists (`CloudVault::change_credentials`); the UI does not.
 - **VEK rotation** with an atomic commit of key slot and vault file. Needs more than two separate uploads.
 - **Encrypt the `.key` file inside a `.skln`**, after the security update in Kiln (see "The key file").
+

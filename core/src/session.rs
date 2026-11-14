@@ -224,7 +224,10 @@ impl Session {
 }
 
 fn same_login(a: &Entry, b: &Entry) -> bool {
-    a.title.trim().eq_ignore_ascii_case(b.title.trim())
+    a.kind_index() == b.kind_index()
+        && a.fields == b.fields
+        && (a.kind_index() != 2 || a.notes == b.notes)
+        && a.title.trim().eq_ignore_ascii_case(b.title.trim())
         && a.username.trim().eq_ignore_ascii_case(b.username.trim())
         && a.url.trim().eq_ignore_ascii_case(b.url.trim())
         && a.password == b.password

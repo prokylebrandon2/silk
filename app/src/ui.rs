@@ -249,7 +249,12 @@ fn wire(ui: &MainWindow, ctl: &Shared) {
             (7, "login", "Login", "Username, password and website"),
             (1, "card", "Card", "Payment card details"),
             (2, "note", "Note", "Free-form text"),
-            (3, "identity", "Identity", "Name, address and contact details"),
+            (
+                3,
+                "identity",
+                "Identity",
+                "Name, address and contact details",
+            ),
             (4, "password", "Password", "A password on its own"),
             (5, "other", "Other", "Fields you name yourself"),
             (6, "folder", "Folder", "Group items together"),
@@ -1840,7 +1845,7 @@ fn finish_import(ui: &MainWindow, c: &mut Ctl, imp: transfer::Imported) {
             ui.set_error("".into());
             let mut msg = format!(
                 "Imported {added} {}.",
-                if added == 1 { "login" } else { "logins" }
+                if added == 1 { "item" } else { "items" }
             );
             if dups > 0 {
                 msg += &format!(" {dups} already in the vault, skipped.");

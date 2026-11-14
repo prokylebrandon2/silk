@@ -10,7 +10,7 @@
 // So: Argon2id key -> unwrap VEK -> decrypt the vault file -> read the bundle. The key is
 // Argon2id( SHA-256(password) [then SHA-256(that || SHA-256(key file))] ) with the key slot's salt.
 import { argon2, TYPES } from './argon2.js';
-import { isSkln, openSkln, unpackBundle, KIND_BUNDLE } from './skln.js';
+import { isSkln, openSkln, parseSkln, unpackBundle, packBundle, sealSkln, KIND_BUNDLE } from './skln.js';
 
 const NONCE_LEN = 12;
 const BUNDLE_HEADER = 5; // "SKBK" + version
@@ -75,8 +75,11 @@ const decryptGcm = async (rawKey, iv, aad, data) => {
 
 const damaged = () => new VaultError('corrupt', 'The vault file is damaged.');
 
+// Every field of an entry is kept (kind, folder, labelled fields), because saving writes the whole
+// entry back and the app must find its cards, notes and folders as it left them.
 const toEntries = (doc) =>
   (doc.entries || []).map((e) => ({
+    ...e,
     id: String(e.id ?? ''),
     title: String(e.title ?? ''),
     username: String(e.username ?? ''),
@@ -84,6 +87,9 @@ const toEntries = (doc) =>
     url: String(e.url ?? ''),
     otp: String(e.otp ?? ''),
     notes: String(e.notes ?? ''),
+    kind: String(e.kind ?? ''),
+    folder: String(e.folder ?? ''),
+    fields: (Array.isArray(e.fields) ? e.fields : []).map((f) => ({ label: String(f.label ?? ''), value: String(f.value ?? ''), secret: f.secret === true })),
   }));
 
 function parseDoc(bytes) {
@@ -94,14 +100,12 @@ function parseDoc(bytes) {
   }
 }
 
-/** Decrypts the backup and returns the list of logins. Throws VaultError with a code the UI can act on. */
-export async function openVault(file, password, keyFile, onProgress) {
-  const header = parseHeader(file);
+/** The key slot: only the right password (and key file) unwraps the VEK. */
+async function unwrapVek(header, password, keyFile, onProgress) {
   if (header.keyFile && !keyFile) throw new VaultError('key-file-required', 'This vault needs its key file. Choose it and try again.');
   if (!header.keyFile && keyFile) throw new VaultError('key-file-not-used', "This vault doesn't use a key file. Clear the key file and try again.");
   const kek = await deriveKey(password, keyFile, header, onProgress);
-  const { slot, vault } = header;
-  // The key slot: only the right password (and key file) unwraps the VEK.
+  const { slot } = header;
   let vek;
   try {
     vek = await decryptGcm(kek, slot.subarray(SLOT_AAD, SLOT_AAD + NONCE_LEN), slot.subarray(0, SLOT_AAD), slot.subarray(SLOT_AAD + NONCE_LEN));
@@ -109,24 +113,80 @@ export async function openVault(file, password, keyFile, onProgress) {
     throw new VaultError('wrong-credentials', 'Wrong password or key file. Check both and try again.');
   }
   if (vek.length !== 32) throw damaged();
-  // The vault file: with the right VEK this only fails if the file was changed.
+  return vek;
+}
+
+/** The revision in the plain header of a parsed backup (a BigInt). It is authenticated once the vault file opens. */
+export const revisionOf = (header) => parseSkln(header.vault).revision;
+
+/**
+ * Opens the vault file of a backup with the VEK: no password, no Argon2id.
+ * Returns { entries, revision (BigInt), extras }, where extras holds any bundle member besides
+ * vault.json so that saving can carry it along. With the right VEK this only fails if the file was changed.
+ */
+export async function openWithVek(file, vek) {
+  const { vault } = parseHeader(file);
   let plain;
   let members;
+  let revision;
   try {
     const opened = await openSkln(vek, vault);
     plain = opened.plaintext;
+    revision = opened.revision;
     if (opened.kind !== KIND_BUNDLE) throw damaged();
     members = unpackBundle(plain);
   } catch (e) {
     throw e instanceof VaultError ? e : damaged();
-  } finally {
-    vek.fill(0);
   }
   const member = members.get('vault.json');
-  if (!member) throw damaged();
+  if (!member) {
+    plain.fill(0);
+    throw damaged();
+  }
   const doc = parseDoc(member);
+  const extras = new Map();
+  for (const [name, data] of members) if (name !== 'vault.json') extras.set(name, data.slice());
   plain.fill(0);
-  return toEntries(doc);
+  return { entries: toEntries(doc), revision, extras };
+}
+
+/**
+ * Decrypts the backup with the master password (and key file) and returns the entries together with
+ * the VEK, which the caller must wipe or keep on purpose. Throws VaultError with a code the UI can act on.
+ */
+export async function unlockVault(file, password, keyFile, onProgress) {
+  const vek = await unwrapVek(parseHeader(file), password, keyFile, onProgress);
+  try {
+    return { ...(await openWithVek(file, vek)), vek };
+  } catch (e) {
+    vek.fill(0);
+    throw e;
+  }
+}
+
+/** Decrypts the backup and returns the list of logins. Throws VaultError with a code the UI can act on. */
+export async function openVault(file, password, keyFile, onProgress) {
+  const opened = await unlockVault(file, password, keyFile, onProgress);
+  opened.vek.fill(0);
+  return opened.entries;
+}
+
+/**
+ * The backup with `entries` sealed under the VEK as revision + 1 (what the app's save does). The key
+ * slot is the same bytes, so the master password and key file keep working. `extras` and `revision`
+ * come from openWithVek on the backup being replaced. Returns { file, revision }.
+ */
+export async function sealVault(file, vek, entries, extras, revision) {
+  const { slot } = parseHeader(file);
+  const body = new TextEncoder().encode(JSON.stringify({ entries }));
+  const packed = packBundle(new Map([['vault.json', body], ...extras]));
+  const next = revision + 1n;
+  try {
+    return { file: joinBackup(slot, await sealSkln(vek, next, packed)), revision: next };
+  } finally {
+    packed.fill(0);
+    body.fill(0);
+  }
 }
 
 export function toBase64(bytes) {
@@ -147,3 +207,4 @@ export function joinBackup(slot, vault) {
   parseHeader(out); // throws if either part is not what it should be
   return out;
 }
+

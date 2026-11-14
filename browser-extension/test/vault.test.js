@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openVault, parseHeader, joinBackup } from '../src/vault.js';
+import { openVault, unlockVault, sealVault, revisionOf, parseHeader, joinBackup } from '../src/vault.js';
+import { generate, normalize, entropyBits, MIN_LEN, MAX_LEN } from '../src/generator.js';
+import { blank, isLogin, subtitle, sameLogin } from '../src/entry.js';
+import { importFile, exportCsv, exportJson } from '../src/transfer.js';
 import { sealBundle } from './helpers.js';
 import { parseOtp, totpCode, secondsLeft, groupCode } from '../src/totp.js';
 import { urlMatches, hostOf } from '../src/match.js';
@@ -145,4 +148,78 @@ test('URL matching follows the app', () => {
   assert.ok(!urlMatches('androidapp://com.example.app', 'https://example.com'));
   assert.ok(!urlMatches('https://github.com', 'chrome://settings'));
   assert.equal(hostOf('https://user@Example.com:81/x'), 'example.com');
+});
+
+test('saving writes the next revision under the same key slot, and the master password still opens it', async () => {
+  const file = await sealBundle([entry], 'password1', null, undefined, 4);
+  const { vek, revision, extras } = await unlockVault(file, 'password1', null);
+  assert.equal(revision, 4n);
+  const edited = [{ ...entry, title: 'GitHub (work)' }, { ...entry, id: 'b', title: 'Second' }];
+  const sealed = await sealVault(file, vek, edited, extras, revision);
+  assert.equal(sealed.revision, 5n);
+  assert.equal(revisionOf(parseHeader(sealed.file)), 5n);
+  assert.deepEqual(Array.from(parseHeader(sealed.file).slot), Array.from(parseHeader(file).slot));
+  const back = await openVault(sealed.file, 'password1', null);
+  assert.deepEqual(back.map((e) => e.title), ['GitHub (work)', 'Second']);
+  await assert.rejects(openVault(sealed.file, 'wrong', null), { code: 'wrong-credentials' });
+});
+
+test('a vault saved twice keeps counting revisions and carries every field of an entry', async () => {
+  const rich = { ...entry, kind: 'card', folder: 'f1', fields: [{ label: 'Card number', value: '4111', secret: true }] };
+  const file = await sealBundle([rich], 'password1', null, undefined, 1);
+  const first = await unlockVault(file, 'password1', null);
+  const one = await sealVault(file, first.vek, first.entries, first.extras, first.revision);
+  const second = await unlockVault(one.file, 'password1', null);
+  const two = await sealVault(one.file, second.vek, second.entries, second.extras, second.revision);
+  assert.equal(two.revision, 3n);
+  const [back] = await openVault(two.file, 'password1', null);
+  assert.equal(back.kind, 'card');
+  assert.equal(back.folder, 'f1');
+  assert.deepEqual(back.fields, [{ label: 'Card number', value: '4111', secret: true }]);
+});
+
+test('the generator honours length, character sets and look-alikes', () => {
+  const all = { length: 30, lower: true, upper: true, digits: true, symbols: true, avoidLookalikes: true };
+  for (let i = 0; i < 50; i++) {
+    const p = generate(all);
+    assert.equal(p.length, 30);
+    assert.match(p, /[a-z]/);
+    assert.match(p, /[A-Z]/);
+    assert.match(p, /[0-9]/);
+    assert.match(p, /[!@#$%^&*\-_=+?]/);
+    assert.doesNotMatch(p, /[Il1O0o]/);
+  }
+  assert.match(generate({ ...all, lower: false, upper: false, symbols: false }), /^[0-9]+$/);
+  assert.equal(normalize({ length: 3 }).length, MIN_LEN);
+  assert.equal(normalize({ length: 500 }).length, MAX_LEN);
+  assert.equal(normalize({ lower: false, upper: false, digits: false, symbols: false }).lower, true);
+  assert.ok(entropyBits(all) > entropyBits({ ...all, length: 10 }));
+});
+
+test('items start as the app starts them, and logins are told apart like the app does', () => {
+  assert.equal(blank('login').kind, '');
+  assert.equal(isLogin(blank('login')), true);
+  assert.equal(isLogin(blank('card')), false);
+  assert.equal(blank('card').fields.length, 5);
+  assert.equal(blank('identity').fields.length, 8);
+  assert.equal(blank('note').fields.length, 0);
+  const card = blank('card');
+  card.fields[1].value = '4111 1111 1111 1234';
+  assert.equal(subtitle(card), '•••• 1234');
+  assert.equal(sameLogin({ title: 'A', username: 'U', url: 'x.com', password: 'p' }, { title: ' a ', username: 'u', url: 'X.com', password: 'p' }), true);
+  assert.equal(sameLogin({ title: 'A', username: 'u', url: 'x.com', password: 'p' }, { title: 'A', username: 'u', url: 'x.com', password: 'P' }), false);
+});
+
+test('Proton Pass CSV and JSON exports can be read back', () => {
+  const logins = [
+    { ...blank('login'), title: 'GitHub', username: 'me@example.com', password: 'p,w"x', url: 'https://github.com', notes: 'two\nlines' },
+    { ...blank('login'), title: 'Forum', username: 'me', password: 'secret', url: 'https://forum.example' },
+  ];
+  for (const text of [exportCsv(logins, 1700000000), exportJson(logins, 1700000000)]) {
+    const { entries } = importFile(new TextEncoder().encode(text));
+    assert.equal(entries.length, 2);
+    assert.deepEqual(entries.map((e) => [e.title, e.username, e.password, e.url]), logins.map((e) => [e.title, e.username, e.password, e.url]));
+    assert.equal(entries[0].notes, 'two\nlines');
+  }
+  assert.throws(() => importFile(new TextEncoder().encode('{"encrypted":true,"vaults":{}}')), { code: 'import' });
 });

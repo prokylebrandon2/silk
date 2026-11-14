@@ -1,24 +1,25 @@
-import { parseOtp, totpCode, secondsLeft, groupCode } from './src/totp.js';
+import { parseOtp, otpLabel, totpCode, secondsLeft, groupCode } from './src/totp.js';
 import { urlMatches, hostOf } from './src/match.js';
 import { silkFill } from './src/fill.js';
-import { toBase64, fromBase64, parseHeader, joinBackup, VaultError } from './src/vault.js';
+import { VaultError } from './src/vault.js';
+import { isLogin, kindName, blank, subtitle, sameLogin, NEW_KINDS } from './src/entry.js';
+import { generate, entropyBits, normalize, MIN_LEN, MAX_LEN } from './src/generator.js';
+import { importFile, exportCsv, exportJson, ImportError } from './src/transfer.js';
+import { CLOUD, cloudSession, signInAndDownload, signOut, syncNow } from './src/cloud.js';
+import { exclusive, loadVault, storeVault, startSession, ensureUnlocked, touchSession, lockAll, setKeep, saveEntries, reopenSession, loadPrefs, savePrefs } from './src/state.js';
 
-// Public client values (project URL and publishable key). CI replaces the two placeholders from the
-// repository secrets when it packages the extension; without them cloud sign-in is switched off.
-const SUPABASE_URL = 'YOUR_SUPABASE_URL';
-const SUPABASE_PUBLISHABLE_KEY = 'YOUR_SUPABASE_PUBLISHABLE_KEY';
-const IDLE_MS = 5 * 60 * 1000; // same idle limit as the app
 const MAX_FILE = 8 * 1024 * 1024; // chrome.storage.local allows 10 MB
 
 const app = document.getElementById('app');
-const CLOUD = cloudConfig(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
-const st = { vault: null, header: null, name: '', entries: null, tab: 'logins', query: '', page: null, msg: '', err: '', busy: false, keyFile: null, keyName: '', progress: 0, timer: null, view: '', email: '' };
+const st = { vault: null, header: null, name: '', entries: null, tab: 'logins', query: '', page: null, msg: '', err: '', busy: false, keyFile: null, keyName: '', timer: null, view: '', email: '', cloud: null, prefs: null, edit: null, gen: '' };
 
 // ------------------------------------------------------------------ small helpers
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const $ = (sel) => app.querySelector(sel);
 const readFile = async (file) => new Uint8Array(await file.arrayBuffer());
+const byTitle = (a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase());
+const now = () => Math.floor(Date.now() / 1000);
 
 async function currentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -26,40 +27,31 @@ async function currentTab() {
 }
 
 async function loadState() {
-  const { vault, vaultName } = await chrome.storage.local.get(['vault', 'vaultName']);
+  const vault = await loadVault();
   if (vault) {
-    try {
-      st.vault = fromBase64(vault);
-      st.header = parseHeader(st.vault);
-      st.name = vaultName || 'vault';
-    } catch {
-      st.vault = null;
-    }
+    st.vault = vault.bytes;
+    st.header = vault.header;
+    st.name = vault.name;
   }
-  const { unlocked } = await chrome.storage.session.get('unlocked');
-  if (unlocked && unlocked.until > Date.now() && st.vault) {
-    st.entries = unlocked.entries;
-    await touch();
-  } else if (unlocked) {
-    await chrome.storage.session.remove('unlocked');
+  [st.prefs, st.cloud] = await Promise.all([loadPrefs(), cloudSession()]);
+  if (st.cloud) st.email = st.cloud.email || '';
+  // "Opens instantly": with the kept key this opens the vault without a password, even after a browser restart.
+  const open = vault ? await exclusive(ensureUnlocked) : null;
+  if (open) {
+    st.entries = open.entries;
+    await touchSession();
   }
   const tab = await currentTab();
   st.page = tab && tab.url ? { id: tab.id, url: tab.url } : null;
 }
 
-async function touch() {
-  if (!st.entries) return;
-  const until = Date.now() + IDLE_MS;
-  await chrome.storage.session.set({ unlocked: { entries: st.entries, until } });
-  chrome.alarms.create('silk-lock', { when: until });
-}
-
 async function lock() {
+  await exclusive(lockAll);
   st.entries = null;
+  st.edit = null;
   st.query = '';
   st.msg = '';
-  await chrome.storage.session.remove('unlocked');
-  chrome.alarms.clear('silk-lock');
+  st.err = '';
   render();
 }
 
@@ -67,11 +59,23 @@ async function copy(text, what) {
   try {
     await navigator.clipboard.writeText(text);
     st.msg = `${what} copied. It stays on the clipboard until you copy something else.`;
+    st.err = '';
   } catch {
     st.err = 'The browser refused to copy.';
   }
-  await touch();
+  await touchSession();
   renderMessages();
+}
+
+function download(name, data, type) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 // ------------------------------------------------------------------ views
@@ -81,6 +85,7 @@ function render() {
   st.timer = null;
   if (!st.vault || st.view === 'login') return renderLogin();
   if (!st.entries) return renderUnlock();
+  if (st.edit) return renderEdit();
   renderMain();
 }
 
@@ -96,7 +101,7 @@ function renderMessages() {
 function renderLogin() {
   const busy = st.busy ? 'disabled' : '';
   const signIn = `
-    <p>Sign in with your Silk account to bring your vault to this browser. It stays encrypted; only your master password opens it.</p>
+    <p>Sign in with your Silk account once. Silk keeps you signed in on this browser, so it opens straight to your vault from then on and stays in step with your phone.</p>
     <input id="email" type="email" placeholder="Account email" autocomplete="username" spellcheck="false" value="${esc(st.email)}" ${busy}>
     <input id="acct" type="password" placeholder="Account password" autocomplete="current-password" ${busy}>
     <button class="primary" id="signin" ${busy}>${st.busy ? 'Signing in…' : 'Sign in'}</button>`;
@@ -108,7 +113,7 @@ function renderLogin() {
     <input id="file" type="file" hidden>
     <button id="pick" ${CLOUD ? '' : 'class="primary"'}>Choose a backup file</button>
     <p class="muted">In the Android app open <b>More</b> and tap <b>Back up vault</b>, move the <code>.silk</code> file to this computer, then choose it here.</p>
-    ${st.vault ? '<div class="row"><button class="link small" id="back">Back to unlock</button></div>' : ''}`;
+    ${st.vault ? '<div class="row"><button class="link small" id="back">Back</button></div>' : ''}`;
   $('#pick').onclick = () => $('#file').click();
   $('#file').onchange = async (e) => {
     const f = e.target.files[0];
@@ -132,103 +137,8 @@ function renderLogin() {
 }
 
 // ------------------------------------------------------------------ cloud sign-in
-// The same two steps as the app (core/src/auth.rs, core/src/supabase.rs): Supabase Auth signs in with
-// email and password, then the two encrypted files come from the user's folder in the private bucket.
-// Only the finished backup is kept; neither the account password nor the session is stored. The content security policy lets this page talk to *.supabase.co and nothing else.
-
-const clean = (s) => String(s).replace(/[\x00-\x1f\x7f]/g, '').slice(0, 160);
-
-function jwtClaims(token) {
-  const parts = String(token).split('.');
-  if (parts.length !== 3) return null;
-  try {
-    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(new TextDecoder().decode(fromBase64(b64 + '='.repeat((4 - (b64.length % 4)) % 4))));
-  } catch {
-    return null;
-  }
-}
-
-/** Same rules as the app's Config::new: a Supabase project URL and a publishable key, never a secret one. */
-function cloudConfig(url, key) {
-  let base = String(url || '').trim().replace(/\/+$/, '');
-  for (const api of ['/rest/v1', '/auth/v1', '/storage/v1']) {
-    if (base.endsWith(api)) {
-      base = base.slice(0, -api.length);
-      break;
-    }
-  }
-  const k = String(key || '').trim();
-  if (!/^https:\/\/[a-z0-9]+\.supabase\.co$/.test(base)) return null;
-  if (!k || k.startsWith('YOUR_') || k.startsWith('sb_secret_') || !/^[A-Za-z0-9._-]+$/.test(k)) return null;
-  if (k.includes('.')) {
-    const claims = jwtClaims(k);
-    if (!claims || claims.role !== 'anon') return null;
-  }
-  return { url: base, key: k };
-}
-
-async function cloudCall(cfg, path, init, token) {
-  const headers = { apikey: cfg.key, ...(init.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  try {
-    return await fetch(cfg.url + path, { ...init, headers, credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(30000) });
-  } catch {
-    throw new VaultError('network', 'Couldn’t reach Supabase. Check your connection and the project URL.');
-  }
-}
-
-function authError(status, body) {
-  const code = String(body.error_code || '');
-  const msg = String(body.msg || body.message || body.error_description || body.error || '');
-  const lower = msg.toLowerCase();
-  if (code === 'invalid_credentials' || body.error === 'invalid_grant' || lower.includes('invalid login credentials')) return 'Wrong email or password.';
-  if (code === 'email_not_confirmed' || lower.includes('email not confirmed')) return 'Confirm your email first: open the link Supabase sent to that address, then sign in.';
-  if (code === 'email_provider_disabled') return 'Email sign-in is turned off in the Supabase project.';
-  if (code === 'user_banned') return 'This account has been disabled.';
-  if (status === 429 || code.startsWith('over_')) return 'Too many attempts. Wait a few minutes and try again.';
-  if (lower.includes('api key') || lower.includes('apikey')) return 'Supabase doesn’t accept that key. Check the publishable key.';
-  return msg ? clean(msg) : `Supabase Auth answered ${status}`;
-}
-
-/** One file from the user's folder. `null` means it isn't there; every other problem throws. */
-async function getObject(cfg, token, uid, name) {
-  const res = await cloudCall(cfg, `/storage/v1/object/authenticated/silk-vaults/vaults/${encodeURIComponent(uid)}/${name}`, {}, token);
-  if (res.ok) {
-    if (Number(res.headers.get('content-length') || 0) > MAX_FILE) throw new VaultError('too-large', 'That vault is too large for this extension.');
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.length > MAX_FILE) throw new VaultError('too-large', 'That vault is too large for this extension.');
-    return bytes;
-  }
-  // Storage sometimes answers 400 with the real status in the body.
-  const err = await res.json().catch(() => ({}));
-  const code = Number(err.statusCode || res.status);
-  const msg = String(err.message || '');
-  if (code === 401 || res.status === 401 || /jwt/i.test(msg)) throw new VaultError('account', 'Supabase didn’t accept the sign-in. Try again.');
-  if (/bucket/i.test(msg)) throw new VaultError('cloud', `Supabase Storage: ${clean(msg)}`);
-  if (code === 404 || err.error === 'not_found') return null;
-  if (code === 403 || /row-level security/i.test(msg)) throw new VaultError('cloud', 'Supabase refused the request. Check that supabase/storage-policies.sql has been run on the project.');
-  throw new VaultError('cloud', `Supabase Storage answered ${code}${msg ? `: ${clean(msg)}` : ''}`);
-}
-
-async function downloadVault(cfg, email, password) {
-  const res = await cloudCall(cfg, '/auth/v1/token?grant_type=password', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new VaultError('account', authError(res.status, body));
-  const uid = body.user && body.user.id;
-  const claims = jwtClaims(body.access_token);
-  // Same check as the app: the token must belong to the account whose folder is read.
-  if (!uid || !claims || claims.sub !== uid) throw new VaultError('account', 'Supabase gave an unexpected sign-in answer.');
-  const slot = await getObject(cfg, body.access_token, uid, 'keyslot.skvk');
-  if (!slot) throw new VaultError('no-vault', 'This account has no vault in the cloud yet. Open Silk on your phone and sync first.');
-  const vault = await getObject(cfg, body.access_token, uid, 'vault.skln');
-  if (!vault) throw new VaultError('no-vault', 'The cloud vault isn’t complete yet. Sync once more in the app, then try again.');
-  return joinBackup(slot, vault);
-}
+// The steps live in src/cloud.js. After the first sign-in only a refresh token is kept (sealed by a key
+// this browser cannot export), so later opens and syncs need no password.
 
 async function signInCloud() {
   if (st.busy) return;
@@ -246,25 +156,24 @@ async function signInCloud() {
   btn.disabled = true;
   btn.textContent = 'Signing in…';
   try {
-    const bytes = await downloadVault(CLOUD, email, password);
-    const name = `Cloud vault · ${email}`;
-    await chrome.storage.local.set({ vault: toBase64(bytes), vaultName: name });
-    st.header = parseHeader(bytes);
+    const { bytes, uid } = await signInAndDownload(email, password);
+    const header = await exclusive(() => storeVault(bytes, `Cloud vault · ${email}`, { deliberate: true, uid }));
+    st.header = header;
     st.vault = bytes;
-    st.name = name;
+    st.name = `Cloud vault · ${email}`;
+    st.cloud = await cloudSession();
     st.entries = null;
-    await chrome.storage.session.remove('unlocked');
     st.view = '';
-    st.msg = 'Vault downloaded. Enter its password to unlock it.';
-    st.busy = false;
-    return render();
+    st.msg = 'Signed in. Enter your master password once; after that Silk opens without asking.';
   } catch (e) {
     st.err = e instanceof VaultError ? e.message : 'Couldn’t download the vault.';
-    st.busy = false;
     btn.disabled = false;
     btn.textContent = 'Sign in';
+    st.busy = false;
     return renderMessages();
   }
+  st.busy = false;
+  render();
 }
 
 async function importVault(file) {
@@ -276,12 +185,10 @@ async function importVault(file) {
   }
   try {
     const bytes = await readFile(file);
-    st.header = parseHeader(bytes);
+    st.header = await exclusive(() => storeVault(bytes, file.name, { deliberate: true, uid: '' }));
     st.vault = bytes;
     st.name = file.name;
-    await chrome.storage.local.set({ vault: toBase64(bytes), vaultName: file.name });
     st.entries = null;
-    await chrome.storage.session.remove('unlocked');
     st.msg = 'Vault added. Enter its password to unlock it.';
     st.view = '';
   } catch (e) {
@@ -289,6 +196,8 @@ async function importVault(file) {
   }
   render();
 }
+
+// ------------------------------------------------------------------ unlock
 
 function renderUnlock() {
   const needsKey = st.header.keyFile;
@@ -298,21 +207,25 @@ function renderUnlock() {
     <input id="pw" type="password" placeholder="Master password" autocomplete="off" ${st.busy ? 'disabled' : ''}>
     ${needsKey ? `<div class="row"><span class="grow muted">${st.keyName ? esc(st.keyName) : 'This vault needs its key file'}</span>
       <input id="kf" type="file" hidden><button class="small" id="pickkey">Choose key file</button></div>` : ''}
-    <button class="primary" id="go" ${st.busy ? 'disabled' : ''}>${st.busy ? `Unlocking… ${Math.round(st.progress * 100)}%` : 'Unlock'}</button>
+    <label class="check"><input type="checkbox" id="keep" ${st.prefs.keep ? 'checked' : ''}> <span>Stay unlocked until I press Lock<br><span class="muted">Silk then opens instantly, even after you restart the browser.</span></span></label>
+    <button class="primary" id="go" ${st.busy ? 'disabled' : ''}>${st.busy ? 'Unlocking…' : 'Unlock'}</button>
     <div id="messages">${messages()}</div>
-    <div class="row"><button class="link small" id="cloud">Sign in to update</button><button class="link small" id="other">Use a different vault file</button></div>
+    <div class="row">${CLOUD && !st.cloud ? '<button class="link small" id="cloud">Sign in</button>' : ''}<button class="link small" id="other">Use a different vault file</button></div>
     <input id="file" type="file" hidden>`;
   $('#pw').focus();
   $('#pw').onkeydown = (e) => { if (e.key === 'Enter') unlock(); };
   $('#go').onclick = unlock;
   $('#other').onclick = () => $('#file').click();
-  $('#cloud').onclick = () => {
-    if (st.busy) return;
-    st.view = 'login';
-    st.err = '';
-    st.msg = '';
-    render();
-  };
+  const cloud = $('#cloud');
+  if (cloud) {
+    cloud.onclick = () => {
+      if (st.busy) return;
+      st.view = 'login';
+      st.err = '';
+      st.msg = '';
+      render();
+    };
+  }
   $('#file').onchange = async (e) => { if (e.target.files[0]) await importVault(e.target.files[0]); };
   if (needsKey) {
     $('#pickkey').onclick = () => $('#kf').click();
@@ -329,10 +242,10 @@ function renderUnlock() {
 function unlock() {
   const pw = $('#pw').value;
   if (!pw || st.busy) return;
+  const keep = $('#keep').checked;
   st.busy = true;
   st.err = '';
   st.msg = '';
-  st.progress = 0;
   const go = $('#go');
   go.disabled = true;
   const worker = new Worker(new URL('./src/worker.js', import.meta.url), { type: 'module' });
@@ -347,11 +260,21 @@ function unlock() {
       st.err = ev.data.error.message;
       return render();
     }
-    st.entries = ev.data.entries;
-    st.keyFile = null;
-    st.keyName = '';
-    await touch();
+    const { entries, vek, revision } = ev.data;
+    try {
+      await exclusive(() => startSession(entries, vek, keep, BigInt(revision)));
+      await savePrefs({ keep });
+      st.prefs.keep = keep;
+      st.entries = entries;
+      st.keyFile = null;
+      st.keyName = '';
+    } catch (e) {
+      st.err = e instanceof VaultError ? e.message : 'Couldn’t open the vault in this browser.';
+    } finally {
+      vek.fill(0);
+    }
     render();
+    if (st.entries) backgroundSync();
   };
   worker.onerror = () => {
     worker.terminate();
@@ -362,20 +285,74 @@ function unlock() {
   worker.postMessage({ file: st.vault, password: pw, keyFile: st.keyFile });
 }
 
+// ------------------------------------------------------------------ sync
+
+const SYNC_MESSAGES = {
+  off: 'Cloud sync isn’t set up in this build.',
+  'signed-out': 'Sign in to your Silk account to sync.',
+  upToDate: 'Already up to date.',
+  uploaded: 'Synced: your changes are in the cloud.',
+  downloaded: 'Synced: a newer vault from your phone was loaded.',
+  cloudNewer: 'The cloud copy is newer than this one. Use Sync now to load it (it replaces changes made only here).',
+  conflict: 'This browser and the cloud both changed. Nothing was copied; your next save here wins.',
+  unlinked: 'This vault came from a file, so it isn’t linked to your account. Sign in again to replace it with the cloud copy.',
+};
+
+/** Syncs and refreshes what's on screen. `quiet` hides "up to date". Returns the report, or null on failure. */
+async function runSync(mode, quiet) {
+  try {
+    const { report } = await syncNow(mode);
+    if (report === 'downloaded') {
+      const entries = await exclusive(reopenSession);
+      st.entries = entries;
+      if (!entries) st.view = '';
+    }
+    st.cloud = await cloudSession();
+    if (!(quiet && (report === 'upToDate' || report === 'signed-out' || report === 'off'))) {
+      st.msg = SYNC_MESSAGES[report] || '';
+      st.err = '';
+    }
+    return report;
+  } catch (e) {
+    if (!quiet) st.err = e instanceof VaultError ? e.message : 'Couldn’t sync. Check your connection.';
+    if (e && e.code === 'signed-out') st.cloud = await cloudSession();
+    return null;
+  }
+}
+
+async function backgroundSync() {
+  if (!st.cloud) return;
+  const report = await runSync('sync', true);
+  if (report === 'downloaded' && !st.edit) render();
+  else if (st.entries && !st.edit && st.tab === 'more') renderMessages();
+}
+
+// ------------------------------------------------------------------ main
+
 function renderMain() {
+  const tabs = [['logins', 'Items'], ['codes', 'Codes'], ['generator', 'Generator'], ['more', 'More']];
   app.innerHTML = `
-    <div class="row"><div class="brand grow"><img src="icons/48.png" alt=""><h1>Silk</h1></div><button class="link" id="lock">Lock</button></div>
-    <div class="tabs" role="tablist">
-      <button role="tab" id="t-logins" aria-selected="${st.tab === 'logins'}">Logins</button>
-      <button role="tab" id="t-codes" aria-selected="${st.tab === 'codes'}">Codes</button>
-    </div>
+    <div class="row"><div class="brand grow"><img src="icons/48.png" alt=""><h1>Silk</h1></div><button class="small" id="add">New</button><button class="link" id="lock">Lock</button></div>
+    <div class="tabs" role="tablist">${tabs.map(([id, label]) => `<button role="tab" id="t-${id}" aria-selected="${st.tab === id}">${label}</button>`).join('')}</div>
     <div id="messages">${messages()}</div>
     <div id="body"></div>`;
   $('#lock').onclick = lock;
-  $('#t-logins').onclick = () => { st.tab = 'logins'; render(); };
-  $('#t-codes').onclick = () => { st.tab = 'codes'; render(); };
+  $('#add').onclick = () => {
+    st.edit = { e: blank('login', st.page && /^https?:/.test(st.page.url) ? { url: new URL(st.page.url).origin } : {}), isNew: true, show: false };
+    render();
+  };
+  for (const [id] of tabs) {
+    $(`#t-${id}`).onclick = () => {
+      st.tab = id;
+      st.msg = '';
+      st.err = '';
+      render();
+    };
+  }
   if (st.tab === 'logins') renderLogins();
-  else renderCodes();
+  else if (st.tab === 'codes') renderCodes();
+  else if (st.tab === 'generator') renderGenerator();
+  else renderMore();
 }
 
 function matches(e, q) {
@@ -385,32 +362,42 @@ function matches(e, q) {
 }
 
 function itemHtml(e, here) {
+  const login = isLogin(e);
+  const sub = [subtitle(e), login && e.url ? hostOf(e.url) : ''].filter(Boolean).join(' · ');
   return `<div class="item" data-id="${esc(e.id)}">
-    <div><div class="title">${esc(e.title || '(untitled)')}</div><div class="sub">${esc(e.username)}${e.url ? ` · ${esc(hostOf(e.url))}` : ''}</div></div>
+    <div><div class="title">${esc(e.title || '(untitled)')}${login ? '' : ` <span class="badge">${esc(kindName(e))}</span>`}</div><div class="sub">${esc(sub)}</div></div>
     <div class="actions">
-      ${st.page ? `<button class="small ${here ? 'primary' : ''}" data-act="fill">Fill</button>` : ''}
-      ${e.username ? '<button class="small" data-act="user">Copy user</button>' : ''}
-      ${e.password ? '<button class="small" data-act="pass">Copy password</button>' : ''}
-      ${parseOtp(e.otp) ? '<button class="small" data-act="otp">Copy code</button>' : ''}
+      ${login && st.page ? `<button class="small ${here ? 'primary' : ''}" data-act="fill">Fill</button>` : ''}
+      ${login && e.username ? '<button class="small" data-act="user">Copy user</button>' : ''}
+      ${login && e.password ? '<button class="small" data-act="pass">Copy password</button>' : ''}
+      ${login && parseOtp(e.otp) ? '<button class="small" data-act="otp">Copy code</button>' : ''}
+      <button class="small" data-act="edit">Edit</button>
     </div></div>`;
 }
 
 function renderLogins() {
   const body = $('#body');
-  const sorted = st.entries.slice().sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
-  const shown = sorted.filter((e) => matches(e, st.query));
-  const here = st.page ? shown.filter((e) => urlMatches(e.url, st.page.url)) : [];
+  const shown = st.entries.filter((e) => e.kind !== 'folder' && matches(e, st.query)).sort(byTitle);
+  const here = st.page ? shown.filter((e) => isLogin(e) && urlMatches(e.url, st.page.url)) : [];
   const rest = shown.filter((e) => !here.includes(e));
   body.innerHTML = `
-    <input id="q" type="search" placeholder="Search logins" value="${esc(st.query)}">
+    <input id="q" type="search" placeholder="Search" value="${esc(st.query)}">
+    ${st.prefs.tipDismissed ? '' : '<div class="tip"><span>Click a password field on any site to fill it from Silk, or press <b>Ctrl+Shift+F</b>.</span><button class="link small" id="tip">OK</button></div>'}
     <div class="list">
       ${here.length ? `<div class="section">This site</div>${here.map((e) => itemHtml(e, true)).join('')}` : ''}
-      ${rest.length ? `<div class="section">${here.length ? 'All logins' : 'Logins'}</div>${rest.map((e) => itemHtml(e, false)).join('')}` : ''}
-      ${shown.length ? '' : `<p>${st.query ? 'No logins match your search.' : 'This vault has no logins.'}</p>`}
-    </div>
-    <p class="muted">This is a copy of your phone’s vault. To update it, lock Silk and sign in again, or add a new backup file.</p>`;
+      ${rest.length ? `<div class="section">${here.length ? 'All items' : 'Items'}</div>${rest.map((e) => itemHtml(e, false)).join('')}` : ''}
+      ${shown.length ? '' : `<p>${st.query ? 'Nothing matches your search.' : 'This vault is empty. Choose New to add something.'}</p>`}
+    </div>`;
   const q = $('#q');
-  q.oninput = () => { st.query = q.value; const pos = q.selectionStart; renderLogins(); const n = $('#q'); n.focus(); n.setSelectionRange(pos, pos); touch(); };
+  q.oninput = () => { st.query = q.value; const pos = q.selectionStart; renderLogins(); const n = $('#q'); n.focus(); n.setSelectionRange(pos, pos); touchSession(); };
+  const tip = $('#tip');
+  if (tip) {
+    tip.onclick = async () => {
+      st.prefs.tipDismissed = true;
+      await savePrefs({ tipDismissed: true });
+      renderLogins();
+    };
+  }
   body.querySelectorAll('.item').forEach((row) => {
     const e = st.entries.find((x) => x.id === row.dataset.id);
     row.querySelectorAll('button').forEach((b) => {
@@ -426,10 +413,14 @@ async function act(what, e) {
   if (what === 'pass') return copy(e.password, 'Password');
   if (what === 'otp') {
     const p = parseOtp(e.otp);
-    return p ? copy(await totpCode(p, Math.floor(Date.now() / 1000)), 'Code') : null;
+    return p ? copy(await totpCode(p, now()), 'Code') : null;
+  }
+  if (what === 'edit') {
+    st.edit = { e: structuredClone(e), isNew: false, show: false };
+    return render();
   }
   if (what === 'fill') return fill(e, null);
-  if (what === 'fillcode') return fill(e, await totpCode(parseOtp(e.otp), Math.floor(Date.now() / 1000)));
+  if (what === 'fillcode') return fill(e, await totpCode(parseOtp(e.otp), now()));
   return null;
 }
 
@@ -454,9 +445,7 @@ async function fill(e, code) {
         st.err = 'No code field found on this page. Copy the code instead.';
       }
     } else if (r && (r.user || r.pass)) {
-      st.msg = 'Filled.';
-      await touch();
-      renderMessages();
+      await touchSession();
       return window.close();
     } else {
       st.err = 'No login form found on this page.';
@@ -464,15 +453,15 @@ async function fill(e, code) {
   } catch {
     st.err = 'The browser doesn’t allow filling this page.';
   }
-  await touch();
+  await touchSession();
   return renderMessages();
 }
 
 function renderCodes() {
   const body = $('#body');
-  const withOtp = st.entries.map((e) => ({ e, p: parseOtp(e.otp) })).filter((x) => x.p).sort((a, b) => a.e.title.toLowerCase().localeCompare(b.e.title.toLowerCase()));
+  const withOtp = st.entries.filter(isLogin).map((e) => ({ e, p: parseOtp(e.otp) })).filter((x) => x.p).sort((a, b) => byTitle(a.e, b.e));
   if (!withOtp.length) {
-    body.innerHTML = '<p>No logins in this vault have a one-time password secret yet. Add one in the app.</p>';
+    body.innerHTML = '<p>No logins in this vault have a one-time password secret yet. Open a login with Edit and paste the secret or its otpauth link.</p>';
     return;
   }
   body.innerHTML = `<div class="list">${withOtp.map(({ e }, i) => `
@@ -483,17 +472,17 @@ function renderCodes() {
     </div>`).join('')}</div>`;
   const cache = new Map();
   const tick = async () => {
-    const now = Math.floor(Date.now() / 1000);
+    const t = now();
     for (const [i, { p }] of withOtp.entries()) {
-      const key = `${i}:${Math.floor(now / p.period)}`;
+      const key = `${i}:${Math.floor(t / p.period)}`;
       let code = cache.get(i);
       if (!code || code.key !== key) {
-        code = { key, text: await totpCode(p, now) };
+        code = { key, text: await totpCode(p, t) };
         cache.set(i, code);
       }
       const row = body.querySelector(`.item[data-i="${i}"]`);
       if (!row) return;
-      const left = secondsLeft(p, now);
+      const left = secondsLeft(p, t);
       row.querySelector('.code').textContent = groupCode(code.text);
       row.querySelector('.bar > i').style.width = `${(left / p.period) * 100}%`;
       row.querySelector('.otp').classList.toggle('urgent', left <= 5);
@@ -501,7 +490,7 @@ function renderCodes() {
   };
   body.querySelectorAll('.item').forEach((row) => {
     const { e, p } = withOtp[Number(row.dataset.i)];
-    row.querySelector('[data-act="copy"]').onclick = async () => copy(await totpCode(p, Math.floor(Date.now() / 1000)), 'Code');
+    row.querySelector('[data-act="copy"]').onclick = async () => copy(await totpCode(p, now()), 'Code');
     const f = row.querySelector('[data-act="fillcode"]');
     if (f) f.onclick = () => act('fillcode', e);
   });
@@ -509,5 +498,249 @@ function renderCodes() {
   st.timer = setInterval(tick, 500);
 }
 
+// ------------------------------------------------------------------ generator
+
+function renderGenerator() {
+  const body = $('#body');
+  const o = st.prefs.gen;
+  if (!st.gen) st.gen = generate(o);
+  const opt = (key, label) => `<label class="check"><input type="checkbox" data-opt="${key}" ${o[key] ? 'checked' : ''}> <span>${label}</span></label>`;
+  body.innerHTML = `
+    <div class="gen"><code id="gen-out">${esc(st.gen)}</code></div>
+    <p class="muted" id="gen-bits"></p>
+    <div class="row"><button class="primary grow" id="gen-copy">Copy</button><button id="gen-new">New</button></div>
+    <label class="field">Length: <b id="gen-len">${o.length}</b>
+      <input type="range" id="gen-range" min="${MIN_LEN}" max="${MAX_LEN}" value="${o.length}"></label>
+    ${opt('lower', 'Lowercase (a–z)')}${opt('upper', 'Uppercase (A–Z)')}${opt('digits', 'Digits (0–9)')}${opt('symbols', 'Symbols (!@#…)')}${opt('avoidLookalikes', 'Avoid look-alikes (l I 1 O 0 o)')}`;
+  const bits = () => { $('#gen-bits').textContent = `About ${Math.round(entropyBits(st.prefs.gen))} bits of strength`; };
+  const again = () => { st.gen = generate(st.prefs.gen); $('#gen-out').textContent = st.gen; bits(); };
+  const change = async (patch) => {
+    st.prefs.gen = normalize({ ...st.prefs.gen, ...patch });
+    await savePrefs({ gen: st.prefs.gen });
+    renderGenerator();
+    again();
+  };
+  bits();
+  $('#gen-new').onclick = again;
+  $('#gen-copy').onclick = () => copy(st.gen, 'Password');
+  $('#gen-range').oninput = (ev) => { $('#gen-len').textContent = ev.target.value; };
+  $('#gen-range').onchange = (ev) => change({ length: Number(ev.target.value) });
+  body.querySelectorAll('[data-opt]').forEach((c) => {
+    c.onchange = () => change({ [c.dataset.opt]: c.checked });
+  });
+}
+
+// ------------------------------------------------------------------ more
+
+function renderMore() {
+  const body = $('#body');
+  const synced = async () => {
+    const { lastSync } = await chrome.storage.local.get('lastSync');
+    const el = $('#last-sync');
+    if (el) el.textContent = lastSync ? `Last synced ${new Date(lastSync).toLocaleString()}` : 'Not synced yet';
+  };
+  body.innerHTML = `
+    <div class="section">Unlocking</div>
+    <label class="check"><input type="checkbox" id="keep" ${st.prefs.keep ? 'checked' : ''}> <span>Stay unlocked until I press Lock<br><span class="muted">Off: Silk locks itself after 5 idle minutes.</span></span></label>
+    <div class="section">Account</div>
+    ${st.cloud
+      ? `<p>${esc(st.cloud.email || 'Signed in')}</p><p class="muted" id="last-sync"></p>
+         <div class="actions"><button class="small" id="sync">Sync now</button><button class="small" id="signout">Sign out</button></div>`
+      : CLOUD ? '<p class="muted">Not signed in. Sign in once to sync with your phone.</p><div class="actions"><button class="small" id="signin-view">Sign in</button></div>' : '<p class="muted">Cloud sync isn’t set up in this build.</p>'}
+    <div class="section">Backup</div>
+    <div class="actions"><button class="small" id="dl">Download encrypted backup</button><button class="small" id="other">Use a different file</button></div>
+    <div class="section">Move logins</div>
+    <p class="muted">Proton Pass JSON or CSV exports. Exported files are not encrypted.</p>
+    <div class="actions"><button class="small" id="imp">Import</button><button class="small" id="exp-csv">Export CSV</button><button class="small" id="exp-json">Export JSON</button></div>
+    <input id="file" type="file" hidden><input id="impfile" type="file" accept=".json,.csv,text/csv,application/json" hidden>`;
+  if (st.cloud) synced();
+  $('#keep').onchange = async (ev) => {
+    const keep = ev.target.checked;
+    st.prefs.keep = keep;
+    await savePrefs({ keep });
+    await exclusive(() => setKeep(keep));
+  };
+  const sync = $('#sync');
+  if (sync) {
+    sync.onclick = async () => {
+      sync.disabled = true;
+      sync.textContent = 'Syncing…';
+      await runSync('sync', false);
+      render();
+    };
+    $('#signout').onclick = async () => {
+      await signOut();
+      st.cloud = null;
+      st.msg = 'Signed out. The vault stays in this browser.';
+      render();
+    };
+  }
+  const si = $('#signin-view');
+  if (si) {
+    si.onclick = () => {
+      st.view = 'login';
+      render();
+    };
+  }
+  $('#dl').onclick = () => {
+    download(`silk-backup-${new Date().toISOString().slice(0, 10)}.silk`, st.vault, 'application/octet-stream');
+    st.msg = 'Backup downloaded. It is encrypted: it needs your master password.';
+    renderMessages();
+  };
+  $('#other').onclick = () => $('#file').click();
+  $('#file').onchange = async (e) => {
+    const f = e.target.files[0];
+    if (f && confirm('Replace the vault in this browser with this file?')) {
+      st.view = '';
+      await importVault(f);
+    }
+  };
+  $('#imp').onclick = () => $('#impfile').click();
+  $('#impfile').onchange = (e) => e.target.files[0] && importLogins(e.target.files[0]);
+  const exportFile = (kind) => {
+    if (!confirm('The exported file is NOT encrypted: anyone who gets it can read every password in it. Keep it somewhere safe and delete it when you are done.\n\nExport anyway?')) return;
+    if (kind === 'csv') download('silk-export.csv', exportCsv(st.entries, now()), 'text/csv');
+    else download('silk-export.json', exportJson(st.entries, now()), 'application/json');
+  };
+  $('#exp-csv').onclick = () => exportFile('csv');
+  $('#exp-json').onclick = () => exportFile('json');
+}
+
+async function importLogins(file) {
+  st.err = '';
+  st.msg = '';
+  try {
+    if (file.size > MAX_FILE) throw new ImportError('That file is too large to import.');
+    const { entries: found, skipped, passkeys } = importFile(await readFile(file));
+    const next = st.entries.slice();
+    let added = 0;
+    for (const e of found) {
+      if (next.some((x) => isLogin(x) && isLogin(e) && sameLogin(x, e))) continue;
+      next.push(e);
+      added++;
+    }
+    if (added) await persist(next);
+    const dup = found.length - added;
+    st.msg = `Imported ${added} item${added === 1 ? '' : 's'}${dup ? `, ${dup} already here` : ''}${skipped ? `, ${skipped} left out (trash or empty)` : ''}${passkeys ? `, ${passkeys} passkey${passkeys === 1 ? '' : 's'} can’t be copied` : ''}.`;
+  } catch (e) {
+    st.err = e instanceof ImportError || e instanceof VaultError ? e.message : 'Couldn’t import that file.';
+  }
+  render();
+}
+
+// ------------------------------------------------------------------ add and edit
+
+/** Saves `entries` as the next revision, then pushes it to the cloud when signed in. */
+async function persist(entries) {
+  await exclusive(() => saveEntries(entries));
+  st.entries = entries;
+  if (st.cloud) {
+    runSync('push', true).then((report) => {
+      if (report === 'cloudNewer' || report === 'conflict') {
+        st.msg = SYNC_MESSAGES[report];
+        if (!st.edit && st.entries) renderMessages();
+      }
+    });
+  }
+}
+
+function renderEdit() {
+  const { e, isNew, show } = st.edit;
+  const kind = e.kind || 'login';
+  const input = (key, label, type = 'text', extra = '') => `<label class="field">${label}<input data-k="${key}" type="${type}" value="${esc(e[key])}" autocomplete="off" spellcheck="false" ${extra}></label>`;
+  const custom = e.fields.map((f, i) => `<label class="field">${esc(f.label)}<span class="row"><input class="grow" data-f="${i}" type="${f.secret && !show ? 'password' : 'text'}" value="${esc(f.value)}" autocomplete="off" spellcheck="false">${f.value ? `<button class="small" data-copy-f="${i}" type="button">Copy</button>` : ''}</span></label>`).join('');
+  const showLogin = kind === 'login';
+  app.innerHTML = `
+    <div class="row"><h1 class="grow">${isNew ? 'New item' : 'Edit item'}</h1><button class="link" id="cancel">Cancel</button></div>
+    ${isNew ? `<label class="field">Kind<select id="kind">${NEW_KINDS.map(([k, n]) => `<option value="${k}" ${k === kind ? 'selected' : ''}>${n}</option>`).join('')}</select></label>` : `<p class="muted">${esc(kindName(e))}</p>`}
+    ${input('title', 'Title')}
+    ${showLogin ? input('username', 'Username or email') : ''}
+    ${showLogin || kind === 'password' ? `<label class="field">Password<span class="row"><input class="grow" data-k="password" type="${show ? 'text' : 'password'}" value="${esc(e.password)}" autocomplete="new-password" spellcheck="false"><button class="small" id="gen" type="button">Generate</button></span></label>
+      <div class="actions"><button class="small" id="toggle" type="button">${show ? 'Hide' : 'Show'} secrets</button>${e.password ? '<button class="small" id="cp" type="button">Copy password</button>' : ''}</div>` : (e.fields.some((f) => f.secret) ? `<div class="actions"><button class="small" id="toggle" type="button">${show ? 'Hide' : 'Show'} secrets</button></div>` : '')}
+    ${showLogin ? input('url', 'Website', 'text', 'placeholder="https://example.com"') : ''}
+    ${showLogin ? input('otp', 'One-time code secret or otpauth:// link') : ''}
+    ${custom}
+    <label class="field">Notes<textarea data-k="notes" rows="3">${esc(e.notes)}</textarea></label>
+    <div id="messages">${messages()}</div>
+    <div class="row"><button class="primary grow" id="save">Save</button>${isNew ? '' : '<button id="del">Delete</button>'}</div>`;
+  const read = () => {
+    app.querySelectorAll('[data-k]').forEach((el) => { e[el.dataset.k] = el.value; });
+    app.querySelectorAll('[data-f]').forEach((el) => { e.fields[Number(el.dataset.f)].value = el.value; });
+  };
+  $('#cancel').onclick = () => {
+    st.edit = null;
+    st.err = '';
+    render();
+  };
+  const kindSel = $('#kind');
+  if (kindSel) {
+    kindSel.onchange = () => {
+      read();
+      st.edit.e = blank(kindSel.value, { id: e.id, title: e.title, notes: e.notes });
+      render();
+    };
+  }
+  const tg = $('#toggle');
+  if (tg) tg.onclick = () => { read(); st.edit.show = !show; render(); };
+  const gen = $('#gen');
+  if (gen) {
+    gen.onclick = () => {
+      read();
+      e.password = generate(st.prefs.gen);
+      st.edit.show = true;
+      render();
+    };
+  }
+  const cp = $('#cp');
+  if (cp) cp.onclick = () => { read(); copy(e.password, 'Password'); };
+  app.querySelectorAll('[data-copy-f]').forEach((b) => {
+    b.onclick = () => { read(); copy(e.fields[Number(b.dataset.copyF)].value, e.fields[Number(b.dataset.copyF)].label); };
+  });
+  $('#save').onclick = async () => {
+    read();
+    st.err = '';
+    st.msg = '';
+    const otp = e.otp.trim();
+    const label = otp && parseOtp(otp) ? otpLabel(otp) : { title: '', username: '' };
+    const clean = { ...e, title: e.title.trim() || label.title, username: e.username.trim() || label.username, url: e.url.trim(), otp };
+    if (!clean.title) st.err = 'Give it a title.';
+    else if (clean.otp && !parseOtp(clean.otp)) st.err = 'That isn’t a valid one-time code secret or otpauth link.';
+    if (st.err) return renderMessages();
+    if (isNew && showLogin && !clean.username && !clean.password && !clean.url) {
+      st.err = 'Add a username, password or website.';
+      return renderMessages();
+    }
+    const next = isNew ? [...st.entries, clean] : st.entries.map((x) => (x.id === clean.id ? clean : x));
+    $('#save').disabled = true;
+    try {
+      await persist(next);
+      st.edit = null;
+      st.msg = 'Saved.';
+      render();
+    } catch (err) {
+      st.err = err instanceof VaultError ? err.message : 'Couldn’t save.';
+      if (err instanceof VaultError && err.code === 'locked') st.entries = null;
+      $('#save').disabled = false;
+      renderMessages();
+      if (!st.entries) render();
+    }
+  };
+  const del = $('#del');
+  if (del) {
+    del.onclick = async () => {
+      if (!confirm(`Delete “${e.title || 'this item'}”? This also deletes it from your account the next time it syncs.`)) return;
+      try {
+        await persist(st.entries.filter((x) => x.id !== e.id));
+        st.edit = null;
+        st.msg = 'Deleted.';
+      } catch (err) {
+        st.err = err instanceof VaultError ? err.message : 'Couldn’t delete.';
+      }
+      render();
+    };
+  }
+}
+
 await loadState();
 render();
+if (st.entries) backgroundSync();

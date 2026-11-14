@@ -4,7 +4,7 @@
 //!
 //! Proton Pass JSON: `{"vaults": {id: {"name", "items": [{"data": {"type", "metadata": {"name", "note"},
 //! "content": {...}}, "state"}]}}}`. Proton Pass CSV: `type,name,url,email,username,password,note,totp,createTime,modifyTime,vault`.
-use crate::entry::{new_id, Entry};
+use crate::entry::{new_id, template, Entry, Field};
 use crate::error::Error;
 use serde_json::{json, Value};
 
@@ -87,11 +87,14 @@ fn humanize(key: &str) -> String {
     out
 }
 
-/// The simple text and number fields of a Proton item that isn't a login (cards, identities), as note lines.
-fn flatten(content: Option<&Value>) -> Vec<String> {
+/// The simple text and number fields of a Proton item's content as note lines, leaving out the keys in `skip`.
+fn flatten(content: Option<&Value>, skip: &[&str]) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(obj) = content.and_then(Value::as_object) {
         for (k, v) in obj {
+            if skip.contains(&k.as_str()) {
+                continue;
+            }
             let t = match v {
                 Value::String(s) => s.trim().to_string(),
                 Value::Number(n) => n.to_string(),
@@ -105,7 +108,8 @@ fn flatten(content: Option<&Value>) -> Vec<String> {
     lines
 }
 
-fn extra_fields(data: &Value) -> Vec<String> {
+/// The labelled extra fields of a Proton item. A "hidden" one stays hidden in Silk.
+fn extra_pairs(data: &Value) -> Vec<Field> {
     let Some(list) = data.get("extraFields").and_then(Value::as_array) else {
         return Vec::new();
     };
@@ -121,10 +125,87 @@ fn extra_fields(data: &Value) -> Vec<String> {
             if name.is_empty() || val.is_empty() {
                 None
             } else {
-                Some(format!("{name}: {val}"))
+                Some(Field {
+                    label: name.to_string(),
+                    value: val.to_string(),
+                    secret: f.get("type").and_then(Value::as_str) == Some("hidden"),
+                })
             }
         })
         .collect()
+}
+
+fn extra_fields(data: &Value) -> Vec<String> {
+    extra_pairs(data)
+        .into_iter()
+        .map(|f| format!("{}: {}", f.label, f.value))
+        .collect()
+}
+
+/// Proton's card content keys and the label each one gets in Silk.
+const CARD_KEYS: [(&str, &str); 5] = [
+    ("cardholderName", "Cardholder name"),
+    ("number", "Card number"),
+    ("expirationDate", "Expiry date"),
+    ("verificationNumber", "Security code"),
+    ("pin", "PIN"),
+];
+
+/// Proton's identity content keys and the label each one gets in Silk.
+const IDENTITY_KEYS: [(&str, &str); 8] = [
+    ("fullName", "Full name"),
+    ("email", "Email"),
+    ("phoneNumber", "Phone"),
+    ("streetAddress", "Address"),
+    ("city", "City"),
+    ("stateOrProvince", "State or region"),
+    ("zipOrPostalCode", "Postal code"),
+    ("countryOrRegion", "Country"),
+];
+
+/// Proton stores a card's expiry as "2030-01"; Silk shows "01/30".
+fn expiry(s: &str) -> String {
+    match s.split_once('-') {
+        Some((y, m)) if y.len() == 4 && m.len() == 2 => {
+            format!("{m}/{}", y.get(2..).unwrap_or(y))
+        }
+        _ => s.to_string(),
+    }
+}
+
+/// The fields of a card or identity from Proton's content object, plus the keys Silk has no field for
+/// as note lines.
+fn proton_fields(
+    kind: &str,
+    keys: &[(&str, &str)],
+    content: Option<&Value>,
+) -> (Vec<Field>, Vec<String>) {
+    let mut fields = template(kind);
+    let mut skip: Vec<&str> = keys.iter().map(|k| k.0).collect();
+    for f in fields.iter_mut() {
+        if let Some((key, _)) = keys.iter().find(|(_, label)| *label == f.label) {
+            f.value = text(content.and_then(|c| c.get(*key)));
+        }
+        if f.label == "Expiry date" {
+            f.value = expiry(&f.value);
+        }
+    }
+    if kind == "identity" {
+        let name = ["firstName", "middleName", "lastName"]
+            .iter()
+            .map(|k| text(content.and_then(|c| c.get(*k))))
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if let Some(f) = fields.iter_mut().find(|f| f.label == "Full name") {
+            if f.value.is_empty() {
+                f.value = name;
+            }
+        }
+        skip.extend(["firstName", "middleName", "lastName"]);
+    }
+    let lines = flatten(content, &skip);
+    (fields, lines)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -246,29 +327,49 @@ fn json_item(item: &Value, passkeys: &mut usize) -> Option<Entry> {
         return Some(e);
     }
 
-    // Notes, aliases, cards, identities: kept as an entry whose notes hold the fields.
-    let mut lines = flatten(content);
-    lines.extend(extras);
-    let username = if kind == "alias" {
-        text(item.get("aliasEmail"))
-    } else {
-        String::new()
-    };
-    if title.is_empty() && note.trim().is_empty() && lines.is_empty() && username.is_empty() {
+    // A note, a card, an identity and a custom item each get their own kind. An alias has no kind in
+    // Silk, so it stays a login whose username is the alias address.
+    let mut e = Entry::default();
+    let mut lines: Vec<String> = Vec::new();
+    match kind {
+        "note" => e.kind = "note".to_string(),
+        "creditCard" => {
+            e.kind = "card".to_string();
+            (e.fields, lines) = proton_fields("card", &CARD_KEYS, content);
+        }
+        "identity" => {
+            e.kind = "identity".to_string();
+            (e.fields, lines) = proton_fields("identity", &IDENTITY_KEYS, content);
+        }
+        "custom" => {
+            e.kind = "other".to_string();
+            e.fields = extra_pairs(data);
+        }
+        _ => {
+            lines = flatten(content, &[]);
+            if kind == "alias" {
+                e.username = text(item.get("aliasEmail"));
+            }
+        }
+    }
+    if kind != "custom" {
+        lines.extend(extras);
+    }
+    if title.is_empty()
+        && note.trim().is_empty()
+        && lines.is_empty()
+        && e.fields.is_empty()
+        && e.username.is_empty()
+    {
         return None;
     }
-    let title = if title.is_empty() {
+    e.id = new_id();
+    e.title = if title.is_empty() {
         humanize(if kind.is_empty() { "item" } else { kind })
     } else {
         title
     };
-    let mut e = Entry {
-        id: new_id(),
-        title,
-        username,
-        notes: note,
-        ..Default::default()
-    };
+    e.notes = note;
     append_lines(&mut e.notes, lines);
     Some(e)
 }
@@ -340,6 +441,7 @@ fn import_csv(text: &str) -> Result<Imported, Error> {
     let c_pass = find_col(&header, &["password", "login_password"]);
     let c_note = find_col(&header, &["note", "notes", "extra"]);
     let c_totp = find_col(&header, &["totp", "login_totp", "otp"]);
+    let c_type = find_col(&header, &["type"]);
     if c_title.is_none()
         && c_url.is_none()
         && c_user.is_none()
@@ -354,7 +456,7 @@ fn import_csv(text: &str) -> Result<Imported, Error> {
     for row in rows {
         let get = |i: Option<usize>| i.and_then(|i| row.get(i)).map(String::as_str).unwrap_or("");
         let urls: Vec<String> = get(c_url).split_whitespace().map(String::from).collect();
-        let e = make_login(
+        let mut e = make_login(
             get(c_title),
             get(c_email),
             get(c_user),
@@ -363,6 +465,9 @@ fn import_csv(text: &str) -> Result<Imported, Error> {
             get(c_totp),
             get(c_note),
         );
+        if get(c_type).trim().eq_ignore_ascii_case("note") {
+            e.kind = "note".to_string();
+        }
         out.entries.push(e);
     }
     Ok(out)
@@ -589,13 +694,17 @@ mod tests {
         assert!(gh.notes.contains("Recovery: abc"));
 
         let note = imp.entries.iter().find(|e| e.title == "Wi-Fi").unwrap();
+        assert_eq!(note.kind, "note");
         assert_eq!(note.notes, "code 1234");
         assert!(note.password.is_empty());
 
         let card = imp.entries.iter().find(|e| e.title == "Visa").unwrap();
-        assert!(card.notes.contains("Number: 4111111111111111"));
-        assert!(card.notes.contains("Cardholder name: A B"));
-        assert!(!card.notes.contains("Pin"));
+        assert_eq!(card.kind, "card");
+        assert_eq!(card.field("Card number"), "4111111111111111");
+        assert_eq!(card.field("Cardholder name"), "A B");
+        assert_eq!(card.field("Security code"), "123");
+        assert_eq!(card.field("Expiry date"), "01/30");
+        assert!(card.notes.is_empty());
 
         let alias = imp
             .entries
@@ -611,6 +720,27 @@ mod tests {
             .unwrap();
         assert_eq!(old.username, "olduser");
         assert_eq!(old.url, "example.org");
+    }
+
+    #[test]
+    fn imports_identities_and_custom_items() {
+        let json = r#"{"encrypted":false,"vaults":{"v":{"items":[
+          {"state":1,"data":{"type":"identity","metadata":{"name":"Me","note":""},"extraFields":[],
+            "content":{"firstName":"A","lastName":"B","email":"a@b.test","city":"Oslo","birthdate":"2000-01-01"}}},
+          {"state":1,"data":{"type":"custom","metadata":{"name":"Router","note":"basement"},
+            "extraFields":[{"fieldName":"Admin","type":"hidden","data":{"content":"pw"}},{"fieldName":"IP","type":"text","data":{"content":"10.0.0.1"}}],"content":{}}}
+        ]}}}"#;
+        let imp = import(json.as_bytes()).unwrap();
+        let me = &imp.entries[0];
+        assert_eq!(me.kind, "identity");
+        assert_eq!(me.field("Full name"), "A B");
+        assert_eq!(me.field("City"), "Oslo");
+        assert!(me.notes.contains("Birthdate: 2000-01-01"));
+        let router = &imp.entries[1];
+        assert_eq!(router.kind, "other");
+        assert_eq!(router.notes, "basement");
+        assert_eq!(router.fields.len(), 2);
+        assert!(router.fields[0].secret);
     }
 
     #[test]

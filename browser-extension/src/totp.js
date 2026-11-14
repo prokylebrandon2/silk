@@ -21,14 +21,8 @@ export function base32Decode(s) {
   return out.length ? Uint8Array.from(out) : null;
 }
 
-/** A bare Base32 secret or an otpauth://totp link. Returns null when it can't be read. */
-export function parseOtp(input) {
-  const s = (input || '').trim();
-  if (!s) return null;
-  if (!s.toLowerCase().startsWith('otpauth://')) {
-    const secret = base32Decode(s);
-    return secret ? { secret, digits: 6, period: 30, algo: 'SHA-1' } : null;
-  }
+/** The query of an otpauth:// link as a Map with lower-case keys, or null when it has none. */
+function queryOf(s) {
   const qi = s.indexOf('?');
   if (qi < 0) return null;
   const q = new Map();
@@ -45,6 +39,19 @@ export function parseOtp(input) {
     }
     q.set(k.toLowerCase(), v);
   }
+  return q;
+}
+
+/** A bare Base32 secret or an otpauth://totp link. Returns null when it can't be read. */
+export function parseOtp(input) {
+  const s = (input || '').trim();
+  if (!s) return null;
+  if (!s.toLowerCase().startsWith('otpauth://')) {
+    const secret = base32Decode(s);
+    return secret ? { secret, digits: 6, period: 30, algo: 'SHA-1' } : null;
+  }
+  const q = queryOf(s);
+  if (!q) return null;
   if (!q.has('secret')) return null;
   const secret = base32Decode(q.get('secret'));
   if (!secret) return null;
@@ -53,6 +60,24 @@ export function parseOtp(input) {
   const digits = Math.min(8, Math.max(6, parseInt(q.get('digits') || '6', 10) || 6));
   const period = Math.max(1, parseInt(q.get('period') || '30', 10) || 30);
   return { secret, digits, period, algo };
+}
+
+/** The name and account an otpauth:// link carries, for a new authenticator. A bare setup key has neither. */
+export function otpLabel(input) {
+  const s = (input || '').trim();
+  if (!s.toLowerCase().startsWith('otpauth://')) return { title: '', username: '' };
+  const slash = s.indexOf('/', 'otpauth://'.length);
+  const path = slash < 0 ? '' : s.slice(slash + 1).split('?')[0];
+  let label = path;
+  try {
+    label = decodeURIComponent(path);
+  } catch {
+    // keep the raw text
+  }
+  const colon = label.indexOf(':');
+  const account = (colon >= 0 ? label.slice(colon + 1) : label).trim();
+  const issuer = ((queryOf(s) || new Map()).get('issuer') || (colon >= 0 ? label.slice(0, colon) : '')).trim();
+  return { title: issuer || account, username: account };
 }
 
 export async function totpCode(p, unixSecs) {
@@ -74,3 +99,4 @@ export const secondsLeft = (p, unixSecs) => p.period - (unixSecs % p.period);
 
 /** "123456" -> "123 456", "12345678" -> "1234 5678". */
 export const groupCode = (c) => (c.length === 8 ? `${c.slice(0, 4)} ${c.slice(4)}` : `${c.slice(0, 3)} ${c.slice(3)}`);
+

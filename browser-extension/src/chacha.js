@@ -1,4 +1,4 @@
-// ChaCha20-Poly1305 (RFC 8439), decrypting only.
+// ChaCha20-Poly1305 (RFC 8439), opening and sealing.
 //
 // A `.skln` vault file (core/src/skln.rs, Kiln's format) is sealed with it, and WebCrypto has no
 // ChaCha20, so the extension carries its own, as it does for Argon2id. Poly1305 uses BigInt: that is
@@ -76,6 +76,22 @@ function poly1305(key, msg) {
   return tag;
 }
 
+const pad16 = (n) => (16 - (n % 16)) % 16;
+
+/** The tag over the associated data and the ciphertext (RFC 8439 section 2.8), keyed by block 0 of the stream. */
+function tagFor(key, nonce, aad, ct) {
+  const otk = xorStream(key, nonce, 0, new Uint8Array(32));
+  const mac = new Uint8Array(aad.length + pad16(aad.length) + ct.length + pad16(ct.length) + 16);
+  mac.set(aad, 0);
+  mac.set(ct, aad.length + pad16(aad.length));
+  const dv = new DataView(mac.buffer);
+  dv.setBigUint64(mac.length - 16, BigInt(aad.length), true);
+  dv.setBigUint64(mac.length - 8, BigInt(ct.length), true);
+  const tag = poly1305(otk, mac);
+  otk.fill(0);
+  return tag;
+}
+
 /**
  * Decrypts `sealed` (ciphertext followed by its 16-byte tag) with a 32-byte key and 12-byte nonce.
  * Throws if the tag does not match.
@@ -84,18 +100,21 @@ export function chacha20Poly1305Open(key, nonce, aad, sealed) {
   if (key.length !== 32 || nonce.length !== 12 || sealed.length < 16) throw new Error('bad ChaCha20-Poly1305 input');
   const ct = sealed.subarray(0, sealed.length - 16);
   const tag = sealed.subarray(sealed.length - 16);
-  const otk = xorStream(key, nonce, 0, new Uint8Array(32));
-  const pad = (n) => (16 - (n % 16)) % 16;
-  const mac = new Uint8Array(aad.length + pad(aad.length) + ct.length + pad(ct.length) + 16);
-  mac.set(aad, 0);
-  mac.set(ct, aad.length + pad(aad.length));
-  const dv = new DataView(mac.buffer);
-  dv.setBigUint64(mac.length - 16, BigInt(aad.length), true);
-  dv.setBigUint64(mac.length - 8, BigInt(ct.length), true);
-  const expect = poly1305(otk, mac);
-  otk.fill(0);
+  const expect = tagFor(key, nonce, aad, ct);
   let diff = 0;
   for (let i = 0; i < 16; i++) diff |= expect[i] ^ tag[i];
   if (diff !== 0) throw new Error('ChaCha20-Poly1305 tag mismatch');
   return xorStream(key, nonce, 1, ct);
 }
+
+/** Encrypts `plain` with a 32-byte key and 12-byte nonce. Returns the ciphertext followed by its 16-byte tag. */
+export function chacha20Poly1305Seal(key, nonce, aad, plain) {
+  if (key.length !== 32 || nonce.length !== 12) throw new Error('bad ChaCha20-Poly1305 input');
+  const ct = xorStream(key, nonce, 1, plain);
+  const out = new Uint8Array(ct.length + 16);
+  out.set(ct, 0);
+  out.set(tagFor(key, nonce, aad, ct), ct.length);
+  ct.fill(0);
+  return out;
+}
+

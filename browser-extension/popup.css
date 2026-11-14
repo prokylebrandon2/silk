@@ -60,3 +60,18 @@ button:disabled { opacity: .55; cursor: default; }
 .or { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 12px; }
 .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--outline); }
 code { background: var(--surface); padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+
+textarea, select { width: 100%; padding: 10px 12px; border: 1px solid var(--outline); border-radius: 10px; background: var(--elevated); color: var(--fg); font: inherit; }
+textarea { resize: vertical; }
+textarea:focus, select:focus { outline: none; border-color: var(--focus); background: var(--card); box-shadow: 0 0 0 1px var(--focus); }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.field { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+.check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.check input { margin-top: 3px; accent-color: var(--accent); }
+.tabs button { padding: 8px 10px; }
+.badge { font-size: 11px; font-weight: 500; color: var(--muted); background: var(--surface); border-radius: 6px; padding: 1px 6px; margin-left: 4px; }
+.tip { display: flex; align-items: center; gap: 8px; background: var(--surface); border-radius: 10px; padding: 8px 10px; font-size: 12px; color: var(--muted); }
+.tip span { flex: 1; }
+.gen { background: var(--card); border: 1px solid var(--outline); border-radius: 12px; padding: 12px; }
+.gen code { display: block; background: none; padding: 0; font: 600 16px ui-monospace, monospace; word-break: break-all; color: var(--fg); }
+h1.grow { font-size: 17px; }

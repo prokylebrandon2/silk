@@ -22,7 +22,7 @@ You can also enable optional cloud sync to keep your vault backed up across devi
 - **Password generator** — Create strong, customizable passwords.
 - **Cloud sync** — Optionally synchronize your encrypted vault using Supabase.
 - **Proton Pass import and export** — Move your existing passwords between Silk and Proton Pass.
-- **Brave and Chrome extension** — Use a read-only copy of your vault in a Chromium-based browser.
+- **Brave and Chrome extension** — Your vault in a Chromium-based browser: sign in once, then it opens instantly, fills logins, and lets you add, edit, generate and sync like the app.
 
 ## Getting started
 
@@ -303,15 +303,16 @@ For setup instructions, authentication details, and storage policy configuration
 
 Silk includes a Manifest V3 browser extension for Brave and other Chromium-based browsers.
 
-The extension lets you use a **read-only copy** of your phone's vault on your computer.
+The extension keeps its own copy of your phone's vault on your computer and stays in step with it through the cloud.
 
 It can:
 
-- Sign in with your Silk cloud account to download your vault, or load a backup file instead.
-- Suggest logins for the website you're visiting.
-- Fill usernames and passwords when you select **Fill**.
-- Fill or copy one-time authentication codes.
-- Lock automatically after five minutes of inactivity.
+- Sign in with your Silk cloud account once, or load a backup file instead. After that it opens straight to your vault: no account sign-in and, with **Stay unlocked until I press Lock** on (the default), no master password either, even after the browser restarts.
+- Autofill: a small Silk menu appears next to a password field on `https` pages (and `localhost`) that has a saved login, and **Ctrl+Shift+F** (**Command+Shift+F** on a Mac) fills the login for the page. You can also use **Fill** in the popup.
+- Add, edit and delete logins, notes, cards and identities, and generate passwords with the app's generator.
+- Fill or copy one-time authentication codes, and add a code secret or an `otpauth://` link to a login.
+- Sync with the cloud like the app does (the higher revision wins), in the background every 30 minutes and after each save.
+- Download an encrypted backup, and import or export Proton Pass JSON and CSV files.
 - Ask for confirmation before filling credentials on a website that does not match the login's saved address.
 
 ### Installing the extension
@@ -333,7 +334,7 @@ Move the resulting `.silk` file to your computer.
 
 You can also extract the `silk-brave-extension` artifact from the GitHub Actions build and load that folder instead.
 
-Sign-in works in that packaged build: CI writes the `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` repository secrets into the two constants at the top of `popup.js`. In the plain `browser-extension/` folder they are placeholders, so only the backup file works (or put your own values in them, without committing them).
+Sign-in works in that packaged build: CI writes the `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` repository secrets into the two constants in `src/config.js`. In the plain `browser-extension/` folder they are placeholders, so only the backup file works (or put your own values in them, without committing them).
 
 **3. Unlock your vault**
 
@@ -341,6 +342,7 @@ Sign-in works in that packaged build: CI writes the `SUPABASE_URL` and `SUPABASE
 2. Sign in with your Silk account, or select your `.silk` backup.
 3. Enter your master password.
 4. Provide your key file if your vault requires one.
+5. Leave **Stay unlocked until I press Lock** on to skip steps 2 to 4 from now on. Press **Lock** (or turn the option off in **More**) to ask for the master password again.
 
 The extension uses the same backup format as the Android app. It unwraps the VEK using Argon2id and decrypts the vault (ChaCha20-Poly1305 for `.skln`, AES-256-GCM for older vault files). It has its own JavaScript Argon2 implementation, so unlocking takes a few seconds.
 
@@ -352,18 +354,22 @@ The extension only requests these permissions:
 - `alarms`
 - `activeTab`
 - `scripting`
+- access to `https` pages and `localhost`, so the autofill menu can appear and the service worker can fill a login you picked
 
-It can interact with a webpage only when you click **Fill**.
+The autofill script only asks the extension's service worker for titles and user names. The password is put into the page by the service worker after a real click on the menu (or your shortcut), never sent to the page script, and the menu sits in a closed shadow root that the page cannot read or click. It only runs on the top frame of `https` pages and `localhost`, and only fills logins saved for that address.
 
-Signing in sends your account email and password to your own Supabase project, downloads the two encrypted vault files, and stores only the finished backup, never the account password or the session. The extension's content security policy lets it talk to `*.supabase.co` and nothing else.
+Signing in sends your account email and password to your own Supabase project, downloads the two encrypted vault files, and stores only the finished backup. The account password is never stored. What is kept to sign in again is the refresh token, and what is kept to open without a password is the vault key. Both are sealed by a non-extractable key that lives in this browser profile's IndexedDB, so the sealed text in extension storage is useless on its own. The extension's content security policy lets it talk to `*.supabase.co` and nothing else.
 
-The encrypted backup is kept in extension-local storage. Decrypted login data stays in session storage, which the browser does not write to disk.
+The encrypted backup is kept in extension-local storage. Decrypted login data and the vault key stay in session storage, which the browser does not write to disk.
 
-The extension does not modify your original vault. To update its copy, create another backup in Silk and load that backup into the extension.
+**The price of opening without a password:** anyone who can run code as you in this browser profile, or who copies the whole profile folder, can open the vault. Pressing **Lock** forgets the sealed key and the master password is needed again. Turn **Stay unlocked until I press Lock** off to get the five-minute idle lock back (the vault key is then not kept at all).
+
+Saves follow the app's rules: each save is the next revision of the vault, the key slot is unchanged, the cloud copy with the higher revision wins, and a vault older than one already opened is refused.
 
 **Limitations:**
 
-- The extension does not synchronize changes back to your phone.
+- Two devices changing the same vault at the same revision cannot be merged. Nothing is copied and the next save wins.
+- Folders are shown only through the items inside them; the extension does not create them.
 - It does not clear your clipboard automatically.
 - JavaScript cannot reliably wipe sensitive data from memory.
 
@@ -382,6 +388,8 @@ Tests cover:
 - Opening current backups and older vault files.
 - RFC 6238 TOTP generation.
 - Website matching.
+- Saving, editing and sealing a vault (revision rules, round trip with the vault key), the `.skln` writer.
+- The password generator, Proton Pass import and export, and the item templates.
 
 Requires Node.js 18 or newer.
 
@@ -528,7 +536,6 @@ The following features are not implemented yet:
 - Passphrase generation.
 - Saving new logins directly from other apps.
 - KeePass import.
-- Editing the vault through the browser extension.
 - Changing the master password from the app (the key slot can already be re-wrapped in `core`; there is no screen for it yet).
 - iOS app support.
 
@@ -558,3 +565,4 @@ GitHub Actions also runs these checks in CI.
 ---
 
 **Silk is built around one principle: your vault belongs to you.** It should remain usable offline, encrypted locally, and under your control, even when optional cloud services are enabled.
+

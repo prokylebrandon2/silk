@@ -1,6 +1,6 @@
-// Reads Kiln's `.skln` container, the vault file the app now writes (core/src/skln.rs, Kiln's
-// docs/FORMAT.md "The .skln container"), for a bundle (kind 1) under a raw 32-byte key. Opening only:
-// the extension never writes a vault.
+// Reads and writes Kiln's `.skln` container, the vault file the app writes (core/src/skln.rs, Kiln's
+// docs/FORMAT.md "The .skln container"), for a bundle (kind 1) under a raw 32-byte key. Writing
+// follows Kiln's `seal_with` and `bundle::pack` exactly, so the app opens what the extension saves.
 //
 //   header  magic[8] "\x89SKLN\r\n\x1a" | version u8 (1) | flags u8 | kind u8 | chunk_log2 u8 |
 //           revision u64 | salt[16]                                     (36 bytes, little-endian)
@@ -13,7 +13,7 @@
 //   bundle  count u32 | { name_len u16 | name | data_len u32 | data }*    (little-endian)
 //
 // Every length is checked against what is left of the file before it is used.
-import { chacha20Poly1305Open } from './chacha.js';
+import { chacha20Poly1305Open, chacha20Poly1305Seal } from './chacha.js';
 
 export const MAGIC_SKLN = [0x89, 0x53, 0x4b, 0x4c, 0x4e, 0x0d, 0x0a, 0x1a];
 export const KIND_BUNDLE = 1;
@@ -26,12 +26,15 @@ const MAX_CHUNK_LOG2 = 24;
 const MAX_MEMBERS = 1024;
 const MAX_NAME_LEN = 255;
 const MAX_BUNDLE_LEN = 64 * 1024 * 1024;
+const DEFAULT_CHUNK_LOG2 = 20; // Kiln's default: records of 1 MiB
 const FILE_KEY_INFO = new TextEncoder().encode('kiln skln v1 file key');
 
 export class SklnError extends Error {
   constructor(code) {
-    super(code === 'not-skln' ? 'This is not a .skln file.' : 'The vault file is damaged.');
-    this.code = code; // 'not-skln' | 'corrupt'
+    super(
+      code === 'not-skln' ? 'This is not a .skln file.' : code === 'too-large' ? 'This vault is too large to save from the extension.' : 'The vault file is damaged.',
+    );
+    this.code = code; // 'not-skln' | 'corrupt' | 'too-large'
   }
 }
 
@@ -146,3 +149,80 @@ export function unpackBundle(buf) {
   if (pos !== buf.length) throw bad();
   return members;
 }
+
+/** Encodes a Map of name -> bytes as the little-endian member bundle (kind 1), the inverse of unpackBundle. */
+export function packBundle(members) {
+  if (members.size > MAX_MEMBERS) throw new SklnError('too-large');
+  const enc = new TextEncoder();
+  const named = [];
+  let total = 4;
+  for (const [name, data] of members) {
+    const bytes = enc.encode(name);
+    if (!nameOk(name) || bytes.length > MAX_NAME_LEN) throw new SklnError('corrupt');
+    named.push([bytes, data]);
+    total += 2 + bytes.length + 4 + data.length;
+  }
+  if (total > MAX_BUNDLE_LEN) throw new SklnError('too-large');
+  const out = new Uint8Array(total);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, named.length, true);
+  let pos = 4;
+  for (const [bytes, data] of named) {
+    dv.setUint16(pos, bytes.length, true);
+    pos += 2;
+    out.set(bytes, pos);
+    pos += bytes.length;
+    dv.setUint32(pos, data.length, true);
+    pos += 4;
+    out.set(data, pos);
+    pos += data.length;
+  }
+  return out;
+}
+
+/**
+ * Seals a bundle payload as a kind-1 `.skln` under the VEK, with `revision` in the plain header.
+ * Every call draws a new file salt, so a key and nonce pair never repeats across saves.
+ */
+export async function sealSkln(vek, revision, plaintext, chunkLog2 = DEFAULT_CHUNK_LOG2) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const header = new Uint8Array(HEADER_LEN);
+  header.set(MAGIC_SKLN, 0);
+  header[8] = 1; // version
+  header[9] = 0; // flags: no password block
+  header[10] = KIND_BUNDLE;
+  header[11] = chunkLog2;
+  new DataView(header.buffer).setBigUint64(12, BigInt(revision), true);
+  header.set(salt, 20);
+  const key = await fileKey(vek, salt);
+  const chunk = 2 ** chunkLog2;
+  const count = Math.max(1, Math.ceil(plaintext.length / chunk)); // an empty payload still has a last record
+  const records = [];
+  let size = header.length;
+  try {
+    for (let index = 0; index < count; index++) {
+      const nonce = new Uint8Array(12);
+      new DataView(nonce.buffer).setBigUint64(4, BigInt(index), true);
+      const aad = new Uint8Array(header.length + 1);
+      aad.set(header, 0);
+      aad[header.length] = index === count - 1 ? 1 : 0;
+      const sealed = chacha20Poly1305Seal(key, nonce, aad, plaintext.subarray(index * chunk, (index + 1) * chunk));
+      records.push(sealed);
+      size += 4 + sealed.length;
+    }
+  } finally {
+    key.fill(0);
+  }
+  const out = new Uint8Array(size);
+  out.set(header, 0);
+  const dv = new DataView(out.buffer);
+  let pos = header.length;
+  for (const record of records) {
+    dv.setUint32(pos, record.length, true);
+    pos += 4;
+    out.set(record, pos);
+    pos += record.length;
+  }
+  return out;
+}
+
