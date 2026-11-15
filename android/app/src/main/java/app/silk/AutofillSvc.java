@@ -135,12 +135,22 @@ public class AutofillSvc extends AutofillService {
                     }
                     o.put("hints", hints);
                     o.put("input", node.getInputType());
+                    StringBuilder label = new StringBuilder();
+                    append(label, node.getIdEntry());
+                    append(label, node.getHint());
+                    append(label, node.getContentDescription());
                     ViewStructure.HtmlInfo html = node.getHtmlInfo();
                     if (html != null && html.getAttributes() != null) {
                         for (Pair<String, String> attr : html.getAttributes()) {
                             if ("type".equals(attr.first)) o.put("html", attr.second);
+                            if ("autocomplete".equals(attr.first)) o.put("ac", attr.second);
+                            if ("name".equals(attr.first) || "id".equals(attr.first)
+                                    || "placeholder".equals(attr.first) || "aria-label".equals(attr.first)) {
+                                append(label, attr.second);
+                            }
                         }
                     }
+                    o.put("label", label.toString());
                     nodes.put(o);
                     ids.add(id);
                 } catch (JSONException ignored) {
@@ -148,6 +158,10 @@ public class AutofillSvc extends AutofillService {
                 }
             }
             for (int i = 0; i < node.getChildCount(); i++) walk(node.getChildAt(i));
+        }
+
+        private static void append(StringBuilder sb, CharSequence s) {
+            if (s != null && s.length() > 0) sb.append(s).append(' ');
         }
 
         String json() throws JSONException {

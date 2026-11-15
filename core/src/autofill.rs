@@ -25,6 +25,12 @@ struct Node {
     /// HTML `type` attribute for web forms.
     #[serde(default)]
     html: Option<String>,
+    /// HTML `autocomplete` attribute for web forms (can hold several words).
+    #[serde(default)]
+    ac: String,
+    /// The view's id name, hint and description, and a web field's name, id and placeholder, joined by spaces.
+    #[serde(default)]
+    label: String,
 }
 
 const TYPE_MASK_CLASS: i64 = 0xf;
@@ -33,6 +39,20 @@ const TYPE_CLASS_TEXT: i64 = 0x1;
 const VARIATION_PASSWORD: i64 = 0x80;
 const VARIATION_VISIBLE_PASSWORD: i64 = 0x90;
 const VARIATION_WEB_PASSWORD: i64 = 0xe0;
+const VARIATION_EMAIL: i64 = 0x20;
+const VARIATION_WEB_EMAIL: i64 = 0xd0;
+
+/// Whether the field's `autocomplete` attribute names one of these.
+fn ac_has(n: &Node, names: &[&str]) -> bool {
+    n.ac.split_whitespace()
+        .any(|t| names.iter().any(|x| t.eq_ignore_ascii_case(x)))
+}
+
+/// Whether the field's label mentions one of these words.
+fn label_has(n: &Node, words: &[&str]) -> bool {
+    let l = n.label.to_lowercase();
+    words.iter().any(|w| l.contains(w))
+}
 
 /// Index of the username field (hinted, or the last text field before the password) and of the password field.
 fn detect(nodes: &[Node]) -> (Option<usize>, Option<usize>) {
@@ -40,16 +60,28 @@ fn detect(nodes: &[Node]) -> (Option<usize>, Option<usize>) {
     for (i, n) in nodes.iter().enumerate() {
         let is_text = (n.input & TYPE_MASK_CLASS) == TYPE_CLASS_TEXT;
         let variation = n.input & TYPE_MASK_VARIATION;
+        if ac_has(n, &["new-password"]) || n.hints.iter().any(|h| h == "newPassword") {
+            continue; // choosing a new password: not a login to fill
+        }
         let is_pass = n.hints.iter().any(|h| h == "password")
+            || ac_has(n, &["current-password"])
             || n.html.as_deref() == Some("password")
             || (is_text
                 && (variation == VARIATION_PASSWORD
                     || variation == VARIATION_VISIBLE_PASSWORD
-                    || variation == VARIATION_WEB_PASSWORD));
-        let is_user = n
-            .hints
-            .iter()
-            .any(|h| h == "username" || h == "emailAddress");
+                    || variation == VARIATION_WEB_PASSWORD
+                    || label_has(n, &["password", "passwd", "pwd"])));
+        let is_user = n.hints.iter().any(|h| {
+            matches!(
+                h.as_str(),
+                "username" | "emailAddress" | "phone" | "phoneNumber"
+            )
+        }) || ac_has(n, &["username", "email", "tel"])
+            || n.html.as_deref() == Some("email")
+            || (is_text && (variation == VARIATION_EMAIL || variation == VARIATION_WEB_EMAIL))
+            || (pass.is_none()
+                && !label_has(n, &["search"])
+                && label_has(n, &["user", "email", "e-mail", "login", "account"]));
         if is_pass {
             if pass.is_none() {
                 pass = Some(i);
@@ -184,6 +216,26 @@ mod tests {
         assert_eq!(v["items"].as_array().unwrap().len(), 1);
         assert_eq!(v["items"][0]["label"], "GitHub (me)");
         assert_eq!(v["items"][0]["pass"], "secret");
+    }
+
+    #[test]
+    fn finds_email_fields_labels_and_skips_new_passwords() {
+        let v = |s: &str| {
+            serde_json::from_str::<serde_json::Value>(&handle(&form(s), None)).unwrap()
+        };
+        // web email variation, then a plain text field whose id says password
+        let r = v(r#"[{"input":209},{"input":1,"label":"login_pwd Password"}]"#);
+        assert_eq!((r["user"].as_u64(), r["pass"].as_u64()), (Some(0), Some(1)));
+        // the email-only first step of a two-step login
+        let r = v(r#"[{"html":"email"}]"#);
+        assert_eq!((r["user"].as_u64(), r["pass"].as_u64()), (Some(0), None));
+        // a new-password field is left alone, current-password is used
+        let r = v(
+            r#"[{"ac":"username"},{"ac":"new-password","input":129},{"ac":"current-password","input":129}]"#,
+        );
+        assert_eq!((r["user"].as_u64(), r["pass"].as_u64()), (Some(0), Some(2)));
+        let r = v(r#"[{"ac":"username"},{"ac":"new-password","input":129}]"#);
+        assert_eq!((r["user"].as_u64(), r["pass"].as_u64()), (Some(0), None));
     }
 
     #[test]

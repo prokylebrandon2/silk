@@ -22,8 +22,21 @@
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none' && !el.disabled && !el.readOnly;
   };
 
-  /** The password field of the first login form on the page that is showing. */
-  const passwordField = () => Array.from(document.querySelectorAll('input[type=password]')).find(visible) || null;
+  const tokens = (el) => (el.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/);
+  const words = (el) => `${el.name} ${el.id} ${el.placeholder} ${el.getAttribute('aria-label') || ''}`;
+  /** A password field for logging in (a field for choosing a new password is left alone). */
+  const isPass = (el) => el.type === 'password' && !tokens(el).includes('new-password');
+  /** A field for the user name, email address or phone number of a login. */
+  const isUser = (el) => {
+    const ac = tokens(el);
+    if (ac.includes('username') || ac.includes('email') || el.type === 'email') return true;
+    return ['text', ''].includes(el.type) && /user|e-?mail|login|account/i.test(words(el)) && !/search/i.test(words(el));
+  };
+  /** The focused field, when it is one a saved login can be offered for. */
+  const current = () => {
+    const el = document.activeElement;
+    return el instanceof HTMLInputElement && visible(el) && (isPass(el) || isUser(el)) ? el : null;
+  };
 
   const send = (msg) =>
     new Promise((resolve) => {
@@ -107,14 +120,15 @@
   async function check() {
     timer = 0;
     if (dismissed) return;
-    const field = passwordField();
+    const field = current();
     if (!field) return close();
     if (anchor === field && host) return place();
     const found = await send({ type: 'autofill:list' });
     if (!found || (!found.locked && !found.items.length)) return;
+    // A locked vault only interrupts on a real login form, not on every email box.
+    if (found.locked && !isPass(field) && !tokens(field).includes('username') && !Array.from(document.querySelectorAll('input[type=password]')).some(visible)) return;
     // The field may have gone while the worker answered.
-    const now = passwordField();
-    if (now !== field || document.activeElement !== field) {
+    if (current() !== field) {
       field.addEventListener('focus', () => schedule(), { once: true });
       return;
     }
@@ -126,7 +140,9 @@
   }
 
   document.addEventListener('focusin', (e) => {
-    if (e.target instanceof HTMLInputElement && e.target.type === 'password') schedule();
+    const t = e.target;
+    if (t instanceof HTMLInputElement && (isPass(t) || isUser(t))) schedule();
+    else if (host && t !== host) close();
   });
   document.addEventListener('pointerdown', (e) => {
     if (host && e.composedPath()[0] !== host && !e.composedPath().includes(host) && e.target !== anchor) close();
@@ -141,7 +157,7 @@
   window.addEventListener('resize', place);
   // Single-page sites build their login form after load.
   new MutationObserver(() => {
-    if (!host && document.activeElement instanceof HTMLInputElement && document.activeElement.type === 'password') schedule();
+    if (!host && current()) schedule();
   }).observe(document.documentElement, { childList: true, subtree: true });
-  if (document.activeElement instanceof HTMLInputElement && document.activeElement.type === 'password') schedule();
+  if (current()) schedule();
 })();

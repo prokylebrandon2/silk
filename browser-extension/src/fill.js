@@ -29,14 +29,21 @@ export function silkFill(user, pass, code) {
     return done;
   }
 
-  const pw = inputs.find((i) => i.type === 'password');
+  const ac = (i) => (i.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/);
+  const pws = inputs.filter((i) => i.type === 'password');
+  // The login's password field: marked current-password, else the first one not meant for choosing a new password.
+  const pw = pws.find((i) => ac(i).includes('current-password')) || pws.find((i) => !ac(i).includes('new-password')) || pws[0];
+  // A field the page itself marks as the user name or the email address.
+  const marked = textual.find((i) => ac(i).includes('username')) || textual.find((i) => ac(i).includes('email') || i.type === 'email');
   if (pw && pass) {
     set(pw, pass);
     done.pass = true;
   }
   if (user) {
-    let field = null;
-    if (pw) {
+    let field = marked || null;
+    if (field) {
+      // the page marks it, so use it
+    } else if (pw) {
       // The closest text field that comes before the password field in the page.
       for (const t of textual) {
         if (t.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING) field = t;
